@@ -27,8 +27,9 @@ reference.
 ## Layout
 
 all struct offsets are resolved once and cached (BTF via type_info,
-anchor scan fallback). missing layout makes a call return
--EOPNOTSUPP, never fault.
+anchor scan fallback). missing layout makes a layout-dependent call
+return -EOPNOTSUPP (pid_list, query_maps, get_cmdline) or -EFAULT
+(read/write without a resolvable pgd), never fault.
 
 ## API
 
@@ -50,32 +51,35 @@ release the handle. silent for invalid id.
 **ssize_t rwmem_write(int id, size_t vaddr, const char __user *buf, size_t size)**
 
 page-walk to physical, then read/write through the direct map.
--EINVAL for null buf or size > RWMEM_MAX_TRANSFER (16 MB).
--EBADF for invalid handle. -EPERM when a write hits a read-only
-page (non-force). -EFAULT when the range has no mapping and no
-byte was transferred, or a user copy fails. -EIO when the
-physical read/write fails. partial transfer: returns the bytes
-done so far instead of an error once at least one page moved.
+-EINVAL for null buf, size == 0 or size > RWMEM_MAX_TRANSFER
+(16 MB). -EBADF for invalid handle. -ENOMEM when the bounce page
+cannot be allocated. -EPERM when a write hits a read-only page
+(non-force). -EFAULT when the range has no mapping and no byte
+was transferred, or a user copy fails. -EIO when the physical
+read/write fails. partial transfer: returns the bytes done so far
+instead of an error once at least one page moved.
 
 **ssize_t rwmem_read_force(int id, size_t vaddr, char __user *buf, size_t size)**
 **ssize_t rwmem_write_force(int id, size_t vaddr, const char __user *buf, size_t size)**
 
-force flips the PTE before the transfer and restores it after:
-writes flip the write permission (PTE_DBM set, PTE_RDONLY
-cleared), reads flip the user permission (PTE_USER). on ARM64
-user pages always carry PTE_USER, so the read path rarely
-triggers; it exists for symmetry.
+force flips the PTE before the transfer and restores it after
+(also when the transfer errors mid-page): writes flip the write
+permission (PTE_DBM set, PTE_RDONLY cleared), reads flip the user
+permission (PTE_USER). on ARM64 user pages always carry PTE_USER,
+so the read path rarely triggers; it exists for symmetry.
 
 **ssize_t rwmem_vector(int id, struct rwmem_iovec __user *vec, size_t count, int mode)**
 
 batch of iovecs (vaddr/size/buf) in one call, RWMEM_VEC_READ or
-RWMEM_VEC_WRITE. non-force. returns total bytes on success; on
-error returns the partial total if something moved, otherwise the
+RWMEM_VEC_WRITE. any mode other than RWMEM_VEC_WRITE is treated
+as read. non-force. returns total bytes on success; on error
+returns the partial total if something moved, otherwise the
 error code.
 
 **ssize_t rwmem_pid_list(pid_t __user *buf, size_t max)**
 
 walk the task list from init_task, copy up to max pids.
+-EINVAL (null buf or max == 0), -ENOMEM (allocation failed),
 -EOPNOTSUPP without task layout, -ENODATA without init_task,
 -ENOENT when the list is empty, -EFAULT on copy failure.
 returns the pid count.
@@ -87,15 +91,17 @@ enumerate the mm vm areas. two runtime-probed modes: maple tree
 the list mode to areas ending above start; the mtree mode
 iterates from start. each entry: start/end/flags plus the file
 path resolved through vm_file, dentry.d_name, qstr.name (empty
-when anonymous or layout missing). -EOPNOTSUPP without maps
-layout, -EBADF/-ESRCH for handle/task/mm, -ENOENT when no area
-matches, -EFAULT on copy failure. returns the entry count.
+when anonymous or layout missing). -EINVAL (null out or max == 0),
+-ENOMEM (allocation failed), -EOPNOTSUPP without maps layout,
+-EBADF/-ESRCH for handle/task/mm, -ENOENT when no area matches,
+-EFAULT on copy failure. returns the entry count.
 
 **ssize_t rwmem_get_cmdline(int id, struct rwmem_cmdline __user *out)**
 
 returns the mm arg_start/arg_end addresses, not the contents.
-the caller reads the range with rwmem_read. -EOPNOTSUPP without
-layout, -EBADF/-ESRCH, -EFAULT on copy failure.
+the caller reads the range with rwmem_read. -EINVAL (null out),
+-EOPNOTSUPP without layout, -EBADF/-ESRCH, -EFAULT on copy
+failure.
 
 ## Behavior notes
 

@@ -364,6 +364,9 @@ static ssize_t rwmem_rw(int id, size_t vaddr, char __user *buf, size_t size,
 {
 	struct pid *pid;
 	char *bounce;
+	pte_t *pte;
+	pte_t orig;
+	bool flipped;
 	size_t done = 0;
 	int ret;
 
@@ -384,8 +387,6 @@ static ssize_t rwmem_rw(int id, size_t vaddr, char __user *buf, size_t size,
 	while (done < size) {
 		size_t phy;
 		size_t page_left;
-		pte_t *pte;
-		pte_t orig;
 
 		phy = get_proc_phy_addr(pid, vaddr + done, &pte);
 		if (!phy)
@@ -395,9 +396,11 @@ static ssize_t rwmem_rw(int id, size_t vaddr, char __user *buf, size_t size,
 			page_left = PAGE_SIZE;
 
 		orig = *pte;
+		flipped = false;
 		if (force && !write && !(pte_val(*pte) & PTE_USER)) {
 			set_pte(pte, __pte(pte_val(*pte) | PTE_USER));
 			dsb(ish);
+			flipped = true;
 		} else if (write && !force && !pte_write(*pte)) {
 			if (done)
 				goto out_done;
@@ -407,31 +410,30 @@ static ssize_t rwmem_rw(int id, size_t vaddr, char __user *buf, size_t size,
 			set_pte(pte, __pte((pte_val(*pte) | PTE_DBM) &
 					    ~PTE_RDONLY));
 			dsb(ish);
+			flipped = true;
 		}
 
 		if (write) {
 			if (copy_from_user(bounce, buf + done, page_left)) {
 				ret = -EFAULT;
-				goto out;
+				goto out_restore;
 			}
 			if (!write_ram_physical(phy, bounce, page_left)) {
 				ret = -EIO;
-				goto out;
+				goto out_restore;
 			}
 		} else {
 			if (!read_ram_physical(phy, bounce, page_left)) {
 				ret = -EIO;
-				goto out;
+				goto out_restore;
 			}
 			if (copy_to_user(buf + done, bounce, page_left)) {
 				ret = -EFAULT;
-				goto out;
+				goto out_restore;
 			}
 		}
 
-		if (force && !write && !(pte_val(orig) & PTE_USER))
-			set_pte(pte, orig);
-		else if (force && write && !pte_write(orig))
+		if (flipped)
 			set_pte(pte, orig);
 		done += page_left;
 	}
@@ -441,6 +443,10 @@ out:
 	kfree(bounce);
 	put_pid(pid);
 	return ret;
+out_restore:
+	if (flipped)
+		set_pte(pte, orig);
+	goto out;
 }
 
 ssize_t rwmem_read(int id, size_t vaddr, char __user *buf, size_t size)

@@ -33,6 +33,8 @@ jobs:
           git -C deps/Kerncall checkout 7a3c806
           git clone --depth 1 https://github.com/Dere3046/Type_info.git deps/type_info
           git -C deps/type_info checkout e33f3b4
+          git clone --depth 1 https://github.com/Dere3046/KallRecon.git deps/type_info/kallrecon
+          git -C deps/type_info/kallrecon checkout 8d647f0
       - name: Build
         run: make
       - uses: actions/upload-artifact@v4
