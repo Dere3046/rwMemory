@@ -112,6 +112,6 @@ failure.
   wrapper); a failed page walk stops the transfer, never crashes
 - BTF layout is authoritative; anchor scan only fills the gaps
   (pgd, task offsets) on kernels without usable BTF
-- lib/rw_slide.c: optional sliding-window reader for large kernel
-  ranges (64KB chunks, 512B margin), link it in addition when the
-  slide API is needed (rw_slide_init/advance/ptr/addr)
+- lib/rw_slide.c is gone: the sliding-window reader now lives in
+  Kerncall as sc_slide (lib/sc_slide.c), used by the channel's
+  page-table walk, link deps/Kerncall/lib/sc_slide.o with sc.o
