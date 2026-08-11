@@ -27,7 +27,7 @@
 #define RWMEM_VEC_READ 0
 #define RWMEM_VEC_WRITE 1
 
-#define RWMEM_MAP_PATH_MAX 64
+#define RWMEM_MAP_PATH_MAX 256
 
 struct rwmem_map {
 	unsigned long start;

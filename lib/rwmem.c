@@ -69,8 +69,6 @@ static long g_off_vm_flags = -1;
 static long g_off_vm_next = -1;
 static long g_off_vm_file = -1;
 static long g_off_file_path = -1;
-static long g_off_dentry_name = -1;
-static long g_off_qstr_name = -1;
 
 static int off_from_btf(const char *type, const char *member, long *out)
 {
@@ -539,28 +537,18 @@ ssize_t rwmem_pid_list(pid_t __user *buf, size_t max)
 static int map_path(struct vm_area_struct *vma, char *out, size_t outsz)
 {
 	unsigned long file_addr;
-	unsigned long dentry_addr;
-	unsigned long name_addr;
+	struct path *pathp;
 
 	if (get_off(&g_off_vm_file, "vm_area_struct", "vm_file") ||
-	    get_off(&g_off_file_path, "file", "f_path") ||
-	    get_off(&g_off_dentry_name, "dentry", "d_name") ||
-	    get_off(&g_off_qstr_name, "qstr", "name"))
+	    get_off(&g_off_file_path, "file", "f_path"))
 		return -EOPNOTSUPP;
 
 	file_addr = *(unsigned long *)((char *)vma + g_off_vm_file);
 	if (!file_addr)
 		return -ENOENT;
-	dentry_addr = *(unsigned long *)((char *)file_addr + g_off_file_path +
-					 sizeof(unsigned long));
-	if (!dentry_addr)
+	pathp = (struct path *)((char *)file_addr + g_off_file_path);
+	if (IS_ERR(d_path(pathp, out, outsz)))
 		return -ENOENT;
-	name_addr = *(unsigned long *)((char *)dentry_addr + g_off_dentry_name +
-				       g_off_qstr_name);
-	if (!name_addr)
-		return -ENOENT;
-	if (rw_safe_read(out, (void *)name_addr, outsz - 1))
-		return -EFAULT;
 	out[outsz - 1] = 0;
 	return 0;
 }
@@ -696,7 +684,7 @@ ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max,
 		struct vm_area_struct *vma;
 
 		rwmem_mas_init(&mas, (char *)mm + g_off_mm_mt, start);
-		rcu_read_lock();
+		mmap_read_lock(mm);
 		vma = RWMEM_MAS_FIND(&mas, ULONG_MAX);
 		while (vma && cnt < max) {
 			unsigned long vstart =
@@ -716,10 +704,11 @@ ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max,
 			cnt++;
 			vma = RWMEM_MAS_FIND(&mas, ULONG_MAX);
 		}
-		rcu_read_unlock();
+		mmap_read_unlock(mm);
 	} else {
 		struct vm_area_struct *vma;
 
+		mmap_read_lock(mm);
 		vma = *(struct vm_area_struct **)((char *)mm + g_off_mmap);
 		while (vma && cnt < max) {
 			unsigned long vstart =
@@ -744,6 +733,7 @@ ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max,
 			vma = *(struct vm_area_struct **)((char *)vma +
 							  g_off_vm_next);
 		}
+		mmap_read_unlock(mm);
 	}
 
 	ret = cnt ? (ssize_t)cnt : -ENOENT;
