@@ -32,7 +32,7 @@ jobs:
           git clone --depth 1 https://github.com/Dere3046/KernCall.git deps/Kerncall
           git -C deps/Kerncall checkout 0e19f97
           git clone --depth 1 https://github.com/Dere3046/Hidemod.git deps/hidemod
-          git -C deps/hidemod checkout fff0c94
+          git -C deps/hidemod checkout 0791574
           git clone --depth 1 https://github.com/Dere3046/Type_info.git deps/type_info
           git -C deps/type_info checkout aa514a6
           git clone --depth 1 https://github.com/Dere3046/KallRecon.git deps/type_info/kallrecon
