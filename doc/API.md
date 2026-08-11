@@ -8,11 +8,15 @@ the syscall channel (src/) is one consumer of the lib.
 ## Requirements
 
 - link these objects into your module (see rwMM Makefile):
-  deps/Kerncall/lib/sc.o, deps/type_info/lib/*.o,
+  deps/Kerncall/lib/sc.o, deps/Kerncall/lib/sc_slide.o,
+  deps/hidemod/lib/hidemod.o (when RWMEM_HIDE),
+  deps/type_info/lib/*.o,
   deps/type_info/kallrecon/lib/{core,anchor}.o
 - provide `kr_name_to_addr(const char *)` (KallRecon wrapper)
-- ccflags: -DCONFIG_TI_REMAP -I lib -I deps/type_info/lib
+- ccflags: -DCONFIG_TI_REMAP -DCONFIG_KERNSC_PATCH
+  -DCONFIG_KERNSC_DISCOVER -I lib -I deps/type_info/lib
   -I deps/type_info/kallrecon/lib -I deps/Kerncall/lib
+  -I deps/hidemod/lib
 - layout discovery is BTF first (type_info), anchor bootstrap
   fallback (task struct scan)
 
@@ -28,8 +32,9 @@ reference.
 
 all struct offsets are resolved once and cached (BTF via type_info,
 anchor scan fallback). missing layout makes a layout-dependent call
-return -EOPNOTSUPP (pid_list, query_maps, get_cmdline) or -EFAULT
-(read/write without a resolvable pgd), never fault.
+return -EOPNOTSUPP (pid_list, get_cmdline) or -EFAULT (read/write
+without a resolvable pgd), never fault. query_maps uses compile-time
+fields and needs no layout.
 
 ## API
 
@@ -86,13 +91,14 @@ returns the pid count.
 
 **ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max, unsigned long start)**
 
-enumerate the mm vm areas. two runtime-probed modes: maple tree
-(BTF ma_state layout matches) or the vm_next list. start filters
-the list mode to areas ending above start; the mtree mode
-iterates from start. each entry: start/end/flags plus the file
-path resolved through vm_file, dentry.d_name, qstr.name (empty
-when anonymous or layout missing). -EINVAL (null out or max == 0),
--ENOMEM (allocation failed), -EOPNOTSUPP without maps layout,
+enumerate the mm vm areas. three compile-time modes chosen by the
+build: kernels with maple tree (6.1+) iterate with vma_iter_init +
+mas_find; older kernels use the vm_next list from mm->mmap (default)
+or from find_vma (RWMEM_MAPS_FINDVMA=1). the mtree/iter modes start
+from start; the mmap-list mode filters areas ending above start.
+each entry: start/end/flags plus the file path resolved through
+vma->vm_file->f_path with d_path (empty when anonymous). -EINVAL
+(null out or max == 0), -ENOMEM (allocation failed),
 -EBADF/-ESRCH for handle/task/mm, -ENOENT when no area matches,
 -EFAULT on copy failure. returns the entry count.
 
@@ -118,3 +124,8 @@ failure.
 - module hiding (hidemod) is opt-in: build with RWMEM_HIDE=1 to
   enable the HIDE/UNHIDE channel commands and auto-register the
   module for hiding; default builds ship no hiding at all
+- maps iteration is selectable at build time: the branch follows the
+  kernel headers used, headers with maple_tree.h (6.1+) take
+  vma_iter_init + mas_find; headers without it (5.10/5.15) use the
+  vm_next list from mm->mmap, or from find_vma when built with
+  RWMEM_MAPS_FINDVMA=1
