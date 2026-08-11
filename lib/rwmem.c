@@ -18,24 +18,6 @@
 #include <asm/pgtable.h>
 #include <asm/io.h>
 
-#ifndef _LINUX_MAPLE_TREE_H
-struct ma_state {
-	void *tree;
-	unsigned long index;
-	unsigned long last;
-	void *node;
-	unsigned long min;
-	unsigned long max;
-	void *alloc;
-	unsigned int status;
-	unsigned char depth;
-	unsigned char offset;
-	unsigned char mas_flags;
-	unsigned char end;
-	unsigned int store_type;
-};
-#endif
-
 #include "core.h"
 #include "type_info.h"
 #include "anchor.h"
@@ -60,15 +42,7 @@ static long g_off_pid = -1;
 static long g_off_tasks = -1;
 static long g_off_mm = -1;
 static long g_off_arg_start = -1;
-static long g_off_mmap = -1;
-static long g_off_mm_mt = -1;
 static long g_off_map_count = -1;
-static long g_off_vm_start = -1;
-static long g_off_vm_end = -1;
-static long g_off_vm_flags = -1;
-static long g_off_vm_next = -1;
-static long g_off_vm_file = -1;
-static long g_off_file_path = -1;
 
 static int off_from_btf(const char *type, const char *member, long *out)
 {
@@ -536,110 +510,23 @@ ssize_t rwmem_pid_list(pid_t __user *buf, size_t max)
 
 static int map_path(struct vm_area_struct *vma, char *out, size_t outsz)
 {
-	unsigned long file_addr;
+	struct file *file;
 	struct path *pathp;
 
-	if (get_off(&g_off_vm_file, "vm_area_struct", "vm_file") ||
-	    get_off(&g_off_file_path, "file", "f_path"))
-		return -EOPNOTSUPP;
-
-	file_addr = *(unsigned long *)((char *)vma + g_off_vm_file);
-	if (!file_addr)
+	file = vma->vm_file;
+	if (!file)
 		return -ENOENT;
-	pathp = (struct path *)((char *)file_addr + g_off_file_path);
+	pathp = &file->f_path;
 	if (IS_ERR(d_path(pathp, out, outsz)))
 		return -ENOENT;
 	out[outsz - 1] = 0;
 	return 0;
 }
 
-enum rwmem_maps_mode {
-	RWMEM_MAPS_NONE = 0,
-	RWMEM_MAPS_LIST,
-	RWMEM_MAPS_MTREE,
-};
-
-static enum rwmem_maps_mode g_maps_mode;
-
-#ifdef _LINUX_MAPLE_TREE_H
-#define RWMEM_MAS_FIND(mas, max) mas_find((mas), (max))
-#else
-static void *(*g_mas_find)(struct ma_state *mas, unsigned long max);
-
-static __nocfi void *call_mas_find(struct ma_state *mas, unsigned long max)
-{
-	return g_mas_find(mas, max);
-}
-
-#define RWMEM_MAS_FIND(mas, max) call_mas_find((mas), (max))
+#ifdef CONFIG_RWMEM_MAPS_FINDVMA
+extern struct vm_area_struct *find_vma(struct mm_struct *mm,
+				       unsigned long addr);
 #endif
-
-static void rwmem_mas_init(struct ma_state *mas, void *tree,
-			   unsigned long index)
-{
-	memset(mas, 0, sizeof(*mas));
-	mas->tree = tree;
-	mas->index = index;
-	mas->last = index;
-	mas->max = ULONG_MAX;
-#ifdef MAS_NONE
-	mas->node = MAS_NONE;
-#else
-	mas->status = 1; /* ma_start */
-#endif
-}
-
-static int ma_state_layout_ok(u32 id)
-{
-	u32 size;
-	u32 bit_off;
-	u32 bit_sz;
-
-	size = ti_type_size(ti_base(), id);
-	if (size != sizeof(struct ma_state))
-		return -1;
-	if (ti_member_off(ti_base(), id, "tree", &bit_off, &bit_sz) ||
-	    (bit_off / 8) != offsetof(struct ma_state, tree))
-		return -1;
-	if (ti_member_off(ti_base(), id, "index", &bit_off, &bit_sz) ||
-	    (bit_off / 8) != offsetof(struct ma_state, index))
-		return -1;
-	if (ti_member_off(ti_base(), id, "last", &bit_off, &bit_sz) ||
-	    (bit_off / 8) != offsetof(struct ma_state, last))
-		return -1;
-	return 0;
-}
-
-static int maps_mode_probe(void)
-{
-	u32 id;
-	long off_mmap;
-	long off_next;
-	long off_mt;
-
-	if (g_maps_mode)
-		return 0;
-
-	if (!off_from_btf("mm_struct", "mm_mt", &off_mt) &&
-	    !ti_type_by_name(ti_base(), "ma_state", RWMEM_STRUCT, &id) &&
-	    !ma_state_layout_ok(id)) {
-		g_off_mm_mt = off_mt;
-		g_maps_mode = RWMEM_MAPS_MTREE;
-		pr_info("[rwmem] maps: maple tree\n");
-		return 0;
-	}
-	if (!off_from_btf("mm_struct", "mmap", &off_mmap) &&
-	    !off_from_btf("vm_area_struct", "vm_next", &off_next)) {
-		g_off_mmap = off_mmap;
-		g_off_vm_next = off_next;
-		g_maps_mode = RWMEM_MAPS_LIST;
-		pr_info("[rwmem] maps: vm_next list mmap=%ld vm_next=%ld\n",
-			g_off_mmap, g_off_vm_next);
-		return 0;
-	}
-	g_maps_mode = RWMEM_MAPS_NONE;
-	return -EOPNOTSUPP;
-}
 
 ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max,
 			 unsigned long start)
@@ -653,11 +540,6 @@ ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max,
 
 	if (!out || !max)
 		return -EINVAL;
-	if (maps_mode_probe() ||
-	    get_off(&g_off_vm_start, "vm_area_struct", "vm_start") ||
-	    get_off(&g_off_vm_end, "vm_area_struct", "vm_end") ||
-	    get_off(&g_off_vm_flags, "vm_area_struct", "vm_flags"))
-		return -EOPNOTSUPP;
 
 	pid = handle_get(id);
 	if (!pid)
@@ -679,62 +561,64 @@ ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max,
 		goto out_mm;
 	}
 
-	if (g_maps_mode == RWMEM_MAPS_MTREE) {
-		struct ma_state mas;
+#ifdef _LINUX_MAPLE_TREE_H
+	{
+		struct vma_iterator vmi;
 		struct vm_area_struct *vma;
 
-		rwmem_mas_init(&mas, (char *)mm + g_off_mm_mt, start);
+		vma_iter_init(&vmi, mm, start);
 		mmap_read_lock(mm);
-		vma = RWMEM_MAS_FIND(&mas, ULONG_MAX);
+		vma = mas_find(&vmi.mas, ULONG_MAX);
 		while (vma && cnt < max) {
-			unsigned long vstart =
-				*(unsigned long *)((char *)vma +
-						   g_off_vm_start);
-			unsigned long vend =
-				*(unsigned long *)((char *)vma + g_off_vm_end);
-			unsigned long vflags =
-				*(unsigned long *)((char *)vma +
-						   g_off_vm_flags);
-
-			klist[cnt].start = vstart;
-			klist[cnt].end = vend;
-			klist[cnt].flags = vflags;
+			klist[cnt].start = vma->vm_start;
+			klist[cnt].end = vma->vm_end;
+			klist[cnt].flags = vma->vm_flags;
 			memset(klist[cnt].path, 0, sizeof(klist[cnt].path));
 			map_path(vma, klist[cnt].path, sizeof(klist[cnt].path));
 			cnt++;
-			vma = RWMEM_MAS_FIND(&mas, ULONG_MAX);
+			vma = mas_find(&vmi.mas, ULONG_MAX);
 		}
 		mmap_read_unlock(mm);
-	} else {
+	}
+#elif defined(CONFIG_RWMEM_MAPS_FINDVMA)
+	{
 		struct vm_area_struct *vma;
 
 		mmap_read_lock(mm);
-		vma = *(struct vm_area_struct **)((char *)mm + g_off_mmap);
+		vma = find_vma(mm, start);
 		while (vma && cnt < max) {
-			unsigned long vstart =
-				*(unsigned long *)((char *)vma +
-						   g_off_vm_start);
-			unsigned long vend =
-				*(unsigned long *)((char *)vma + g_off_vm_end);
-			unsigned long vflags =
-				*(unsigned long *)((char *)vma +
-						   g_off_vm_flags);
+			klist[cnt].start = vma->vm_start;
+			klist[cnt].end = vma->vm_end;
+			klist[cnt].flags = vma->vm_flags;
+			memset(klist[cnt].path, 0, sizeof(klist[cnt].path));
+			map_path(vma, klist[cnt].path, sizeof(klist[cnt].path));
+			cnt++;
+			vma = vma->vm_next;
+		}
+		mmap_read_unlock(mm);
+	}
+#else
+	{
+		struct vm_area_struct *vma;
 
-			if (vend > start) {
-				klist[cnt].start = vstart;
-				klist[cnt].end = vend;
-				klist[cnt].flags = vflags;
+		mmap_read_lock(mm);
+		vma = mm->mmap;
+		while (vma && cnt < max) {
+			if (vma->vm_end > start) {
+				klist[cnt].start = vma->vm_start;
+				klist[cnt].end = vma->vm_end;
+				klist[cnt].flags = vma->vm_flags;
 				memset(klist[cnt].path, 0,
 				       sizeof(klist[cnt].path));
 				map_path(vma, klist[cnt].path,
 					 sizeof(klist[cnt].path));
 				cnt++;
 			}
-			vma = *(struct vm_area_struct **)((char *)vma +
-							  g_off_vm_next);
+			vma = vma->vm_next;
 		}
 		mmap_read_unlock(mm);
 	}
+#endif
 
 	ret = cnt ? (ssize_t)cnt : -ENOENT;
 	if (copy_to_user(out, klist, cnt * sizeof(struct rwmem_map)))

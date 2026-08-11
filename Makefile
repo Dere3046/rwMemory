@@ -22,6 +22,10 @@ ccflags-y += -DCONFIG_KERNSC_DISCOVER
 ifdef RWMEM_HIDE
 ccflags-y += -DCONFIG_RWMEM_HIDE
 endif
+
+ifdef RWMEM_MAPS_FINDVMA
+ccflags-y += -DCONFIG_RWMEM_MAPS_FINDVMA
+endif
 ccflags-y += -I$(src)/lib
 ccflags-y += -I$(src)/deps/Kerncall/lib
 ccflags-y += -I$(src)/deps/hidemod/lib
