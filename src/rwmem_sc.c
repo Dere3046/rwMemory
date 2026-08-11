@@ -102,10 +102,12 @@ static long rwmem_handler(const struct pt_regs *regs)
 				    (struct rwmem_iovec __user *)regs->regs[3],
 				    (size_t)regs->regs[4],
 				    (int)regs->regs[5]);
+#ifdef CONFIG_RWMEM_HIDE
 	case RWMEM_CMD_HIDE:
 		return hm_hide();
 	case RWMEM_CMD_UNHIDE:
 		return hm_unhide();
+#endif
 	default:
 		return -ENOSYS;
 	}

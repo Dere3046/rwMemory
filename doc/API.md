@@ -115,3 +115,6 @@ failure.
 - lib/rw_slide.c is gone: the sliding-window reader now lives in
   Kerncall as sc_slide (lib/sc_slide.c), used by the channel's
   page-table walk, link deps/Kerncall/lib/sc_slide.o with sc.o
+- module hiding (hidemod) is opt-in: build with RWMEM_HIDE=1 to
+  enable the HIDE/UNHIDE channel commands and auto-register the
+  module for hiding; default builds ship no hiding at all

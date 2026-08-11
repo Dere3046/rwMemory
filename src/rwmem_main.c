@@ -41,9 +41,11 @@ static int __init rwmem_init(void)
 	if (ret)
 		return ret;
 
+#ifdef CONFIG_RWMEM_HIDE
 	hm_init(&(struct hm_resolver){ .name_to_addr = kr_name_to_addr });
 	hm_set_actions(HM_ACT_ALL);
 	hm_add_module(THIS_MODULE, NULL);
+#endif
 
 	pr_info("[rwmem] loaded\n");
 	return 0;
@@ -51,8 +53,10 @@ static int __init rwmem_init(void)
 
 static void __exit rwmem_exit(void)
 {
+#ifdef CONFIG_RWMEM_HIDE
 	hm_unhide();
 	hm_exit();
+#endif
 	rwmem_sc_exit();
 	ti_exit();
 	pr_info("[rwmem] unloaded\n");

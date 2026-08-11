@@ -18,6 +18,10 @@ ccflags-y += -Wno-strict-prototypes
 ccflags-y += -DCONFIG_TI_REMAP
 ccflags-y += -DCONFIG_KERNSC_PATCH
 ccflags-y += -DCONFIG_KERNSC_DISCOVER
+
+ifdef RWMEM_HIDE
+ccflags-y += -DCONFIG_RWMEM_HIDE
+endif
 ccflags-y += -I$(src)/lib
 ccflags-y += -I$(src)/deps/Kerncall/lib
 ccflags-y += -I$(src)/deps/hidemod/lib
