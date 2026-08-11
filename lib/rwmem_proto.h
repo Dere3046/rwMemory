@@ -24,6 +24,9 @@
 #define RWMEM_CMD_WRITE_FORCE 0x1201
 #define RWMEM_CMD_VECTOR      0x1202
 
+#define RWMEM_CMD_HIDE        0x1300
+#define RWMEM_CMD_UNHIDE      0x1301
+
 #define RWMEM_VEC_READ 0
 #define RWMEM_VEC_WRITE 1
 

