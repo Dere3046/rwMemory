@@ -38,4 +38,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: rwmem-${{ matrix.kmi }}
-          path: rwmem.ko
+          path: out/rwmem.ko
