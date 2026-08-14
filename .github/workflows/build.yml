@@ -30,7 +30,7 @@ jobs:
       - name: Fetch deps
         run: |
           git clone --depth 1 https://github.com/Dere3046/KernCall.git deps/Kerncall
-          git -C deps/Kerncall checkout 0e19f97
+          git -C deps/Kerncall checkout 30f8a29
           git clone --depth 1 https://github.com/Dere3046/Hidemod.git deps/hidemod
           git -C deps/hidemod checkout 0791574
           git clone --depth 1 https://github.com/Dere3046/Type_info.git deps/type_info
