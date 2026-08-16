@@ -26,5 +26,8 @@ ssize_t rwmem_pid_list(pid_t __user *buf, size_t max);
 ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max,
 			 unsigned long start);
 ssize_t rwmem_get_cmdline(int id, struct rwmem_cmdline __user *out);
+int rwmem_remap(const struct rwmem_remap_arg __user *arg);
+int rwmem_get_base(const struct rwmem_base_arg __user *arg);
+int rwmem_touch(const struct rwmem_touch_arg __user *arg);
 
 #endif

@@ -14,6 +14,7 @@
 #include "hidemod.h"
 #include "rwmem_proto.h"
 #include "rwmem.h"
+#include "touch.h"
 #include "rwmem_sc.h"
 
 extern unsigned long kr_name_to_addr(const char *name);
@@ -102,6 +103,12 @@ static long rwmem_handler(const struct pt_regs *regs)
 				    (struct rwmem_iovec __user *)regs->regs[3],
 				    (size_t)regs->regs[4],
 				    (int)regs->regs[5]);
+	case RWMEM_CMD_REMAP:
+		return rwmem_remap((struct rwmem_remap_arg __user *)regs->regs[2]);
+	case RWMEM_CMD_GET_BASE:
+		return rwmem_get_base((struct rwmem_base_arg __user *)regs->regs[2]);
+	case RWMEM_CMD_TOUCH:
+		return rwmem_touch((struct rwmem_touch_arg __user *)regs->regs[2]);
 #ifdef CONFIG_RWMEM_HIDE
 	case RWMEM_CMD_HIDE:
 		return hm_hide();

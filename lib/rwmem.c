@@ -260,7 +260,8 @@ static size_t get_proc_phy_addr(struct pid *pid, size_t vaddr, pte_t **out_pte)
 	pte_t *pte;
 	size_t paddr = 0;
 
-	*out_pte = NULL;
+	if (out_pte)
+		*out_pte = NULL;
 	task = pid_task(pid, PIDTYPE_PID);
 	if (!task)
 		return 0;
@@ -664,5 +665,220 @@ ssize_t rwmem_get_cmdline(int id, struct rwmem_cmdline __user *out)
 	mmput(mm);
 out_pid:
 	put_pid(pid);
+	return ret;
+}
+
+struct rwmem_remap_ctx {
+	struct pid *src_pid;
+	unsigned long src_base;
+	unsigned long dst_base;
+	size_t size;
+};
+
+static vm_fault_t rwmem_remap_fault(const struct vm_special_mapping *sm,
+				    struct vm_area_struct *vma,
+				    struct vm_fault *vmf)
+{
+	return VM_FAULT_SIGBUS;
+}
+
+static void rwmem_remap_close(struct vm_area_struct *vma)
+{
+	struct rwmem_remap_ctx *ctx = vma->vm_private_data;
+
+	if (ctx) {
+		put_pid(ctx->src_pid);
+		kfree(ctx);
+		vma->vm_private_data = NULL;
+	}
+}
+
+static const struct vm_operations_struct rwmem_remap_vm_ops = {
+	.close = rwmem_remap_close,
+};
+
+static struct vm_area_struct *(*g_install_special_mapping)(struct mm_struct *,
+							   unsigned long,
+							   unsigned long,
+							   unsigned long,
+							   const struct vm_special_mapping *);
+static int (*g_remap_pfn_range)(struct vm_area_struct *, unsigned long,
+				unsigned long, unsigned long, pgprot_t);
+
+static bool rwmem_remap_supported(void)
+{
+	return kr_name_to_addr("mas_find") != 0;
+}
+
+int __nocfi rwmem_remap(const struct rwmem_remap_arg __user *arg)
+{
+	struct rwmem_remap_arg karg;
+	struct rwmem_remap_ctx *ctx;
+	struct vm_area_struct *vma;
+	struct mm_struct *mm;
+	struct pid *pid;
+	unsigned long flags;
+	pgprot_t prot;
+	size_t off;
+	int ret;
+
+	if (!arg)
+		return -EINVAL;
+	if (!rwmem_remap_supported())
+		return -EOPNOTSUPP;
+	if (copy_from_user(&karg, arg, sizeof(karg)))
+		return -EFAULT;
+	if (!karg.size || karg.size > RWMEM_MAX_TRANSFER ||
+	    (karg.dst_vaddr & ~PAGE_MASK))
+		return -EINVAL;
+
+	pid = handle_get(karg.handle);
+	if (!pid)
+		return -EBADF;
+
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	if (!ctx) {
+		ret = -ENOMEM;
+		goto out_pid;
+	}
+	ctx->src_pid = get_pid(pid);
+	ctx->src_base = karg.src_vaddr;
+	ctx->dst_base = karg.dst_vaddr;
+	ctx->size = karg.size;
+
+	if (!g_install_special_mapping) {
+		g_install_special_mapping =
+			(void *)kr_name_to_addr("_install_special_mapping");
+		if (!g_install_special_mapping) {
+			ret = -EOPNOTSUPP;
+			goto out_ctx;
+		}
+	}
+	if (!g_remap_pfn_range) {
+		g_remap_pfn_range = (void *)kr_name_to_addr("remap_pfn_range");
+		if (!g_remap_pfn_range) {
+			ret = -EOPNOTSUPP;
+			goto out_ctx;
+		}
+	}
+
+	mm = current->mm;
+	if (!mm) {
+		ret = -ESRCH;
+		goto out_ctx;
+	}
+	mmap_write_lock(mm);
+	if (find_vma(mm, karg.dst_vaddr) &&
+	    find_vma(mm, karg.dst_vaddr)->vm_start <=
+		    karg.dst_vaddr + karg.size) {
+		mmap_write_unlock(mm);
+		ret = -EADDRINUSE;
+		goto out_ctx;
+	}
+	flags = VM_READ | VM_SHARED | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC |
+		VM_PFNMAP;
+	if (karg.writable)
+		flags |= VM_WRITE;
+
+	vma = g_install_special_mapping(mm, karg.dst_vaddr, karg.size,
+					flags, &(struct vm_special_mapping){
+						.name = "rwmem_map",
+						.fault = rwmem_remap_fault,
+					});
+	if (IS_ERR(vma)) {
+		mmap_write_unlock(mm);
+		ret = PTR_ERR(vma);
+		goto out_ctx;
+	}
+	vma->vm_private_data = ctx;
+	vma->vm_ops = &rwmem_remap_vm_ops;
+
+	prot = vm_get_page_prot(flags);
+	for (off = 0; off < karg.size; off += PAGE_SIZE) {
+		pte_t *pte;
+		size_t phy;
+
+		phy = get_proc_phy_addr(pid, karg.src_vaddr + off, &pte);
+		if (!phy)
+			continue;
+		ret = g_remap_pfn_range(vma, karg.dst_vaddr + off,
+					phy >> PAGE_SHIFT, PAGE_SIZE, prot);
+		if (ret)
+			break;
+	}
+	mmap_write_unlock(mm);
+
+	return 0;
+out_ctx:
+	put_pid(ctx->src_pid);
+	kfree(ctx);
+out_pid:
+	put_pid(pid);
+	return ret;
+}
+
+int rwmem_get_base(const struct rwmem_base_arg __user *arg)
+{
+	struct rwmem_base_arg karg;
+	struct vm_area_struct *vma;
+	struct mm_struct *mm;
+	struct pid *pid;
+	struct task_struct *task;
+	int ret = -ENOENT;
+#ifdef _LINUX_MAPLE_TREE_H
+	struct vma_iterator vmi;
+#endif
+
+	if (!arg)
+		return -EINVAL;
+	if (copy_from_user(&karg, arg, sizeof(karg)))
+		return -EFAULT;
+	karg.name[sizeof(karg.name) - 1] = 0;
+
+	pid = handle_get(karg.handle);
+	if (!pid)
+		return -EBADF;
+	task = pid_task(pid, PIDTYPE_PID);
+	if (!task) {
+		ret = -ESRCH;
+		goto out_pid;
+	}
+	mm = get_task_mm(task);
+	if (!mm) {
+		ret = -ESRCH;
+		goto out_pid;
+	}
+
+	mmap_read_lock(mm);
+#ifdef _LINUX_MAPLE_TREE_H
+	vma_iter_init(&vmi, mm, 0);
+	vma = mas_find(&vmi.mas, ULONG_MAX);
+#else
+	vma = mm->mmap;
+#endif
+	while (vma) {
+		if (vma->vm_file) {
+			struct dentry *dentry = vma->vm_file->f_path.dentry;
+
+			if (dentry &&
+			    !strcmp(dentry->d_name.name, karg.name)) {
+				karg.out = vma->vm_start;
+				ret = 0;
+				break;
+			}
+		}
+#ifdef _LINUX_MAPLE_TREE_H
+		vma = mas_find(&vmi.mas, ULONG_MAX);
+#else
+		vma = vma->vm_next;
+#endif
+	}
+	mmap_read_unlock(mm);
+	mmput(mm);
+out_pid:
+	put_pid(pid);
+	if (!ret && copy_to_user(&((struct rwmem_base_arg __user *)arg)->out,
+				 &karg.out, sizeof(karg.out)))
+		return -EFAULT;
 	return ret;
 }

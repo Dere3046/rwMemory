@@ -109,6 +109,39 @@ the caller reads the range with rwmem_read. -EINVAL (null out),
 -EOPNOTSUPP without layout, -EBADF/-ESRCH, -EFAULT on copy
 failure.
 
+**int rwmem_remap(const struct rwmem_remap_arg __user *arg)**
+
+map source process memory into the caller's mm, native access
+without per-page syscalls. arg: handle, src_vaddr, dst_vaddr
+(page aligned), size, writable. builds a VM_PFNMAP special
+mapping at dst_vaddr and fills it page by page with
+remap_pfn_range from the source physical pages (gaps skipped).
+- runtime capability check: needs maple tree (kr_name_to_addr
+  "mas_find" nonzero, 6.1+), older kernels return -EOPNOTSUPP
+  (5.10 zap_pte_range cannot unmap foreign pfn pages safely).
+-EINVAL (null arg, bad size, unaligned dst), -EFAULT (bad user
+arg), -EBADF (bad handle), -EOPNOTSUPP (symbol missing or kernel
+too old), -EADDRINUSE (dst occupied), -ESRCH (no mm), -ENOMEM.
+
+**int rwmem_get_base(const struct rwmem_base_arg __user *arg)**
+
+find the mapping base of a file-backed module by name. arg:
+handle, name[64], out. walks the vmas (vma_iter_init+mas_find on
+6.1+, mm->mmap+vm_next below) and matches dentry->d_name.name.
+returns 0 and fills out with vm_start, -ENOENT when the module is
+not mapped. -EINVAL/-EFAULT/-EBADF/-ESRCH as usual.
+
+**int rwmem_touch(const struct rwmem_touch_arg __user *arg)**
+
+inject touch events into the kernel input core. arg: cmd
+(RWMEM_TOUCH_DOWN/MOVE/UP), x, y, slot. finds the touch input_dev
+by capability (EV_ABS + ABS_MT_POSITION_X/ABS_X), queues events in
+a pool (flushed on SYN by input_event/input_inject_event kprobes)
+and injects via input_handle_event. DOWN allocates a tracking id
+via input_mt_new_trkid, MOVE reuses it, UP releases. -EINVAL (bad
+arg or input not initialized), -ENODEV (no touch device),
+-EOPNOTSUPP (input_handle_event unresolved).
+
 ## Behavior notes
 
 - physical access: get_proc_phy_addr walks the process page

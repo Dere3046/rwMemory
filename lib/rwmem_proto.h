@@ -24,6 +24,35 @@
 #define RWMEM_CMD_WRITE_FORCE 0x1201
 #define RWMEM_CMD_VECTOR      0x1202
 
+#define RWMEM_CMD_REMAP       0x1400
+#define RWMEM_CMD_GET_BASE    0x1500
+#define RWMEM_CMD_TOUCH       0x1600
+
+#define RWMEM_TOUCH_DOWN 0
+#define RWMEM_TOUCH_MOVE 1
+#define RWMEM_TOUCH_UP   2
+
+struct rwmem_remap_arg {
+	int handle;
+	unsigned long src_vaddr;
+	unsigned long dst_vaddr;
+	size_t size;
+	int writable;
+};
+
+struct rwmem_base_arg {
+	int handle;
+	unsigned long out;
+	char name[64];
+};
+
+struct rwmem_touch_arg {
+	int cmd;
+	int x;
+	int y;
+	int slot;
+};
+
 #ifdef CONFIG_RWMEM_HIDE
 #define RWMEM_CMD_HIDE        0x1300
 #define RWMEM_CMD_UNHIDE      0x1301

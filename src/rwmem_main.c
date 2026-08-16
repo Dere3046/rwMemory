@@ -12,6 +12,7 @@
 #include "hidemod.h"
 #include "rwmem_sc.h"
 #include "rwmem.h"
+#include "touch.h"
 
 unsigned long __nocfi kr_name_to_addr(const char *name)
 {
@@ -41,6 +42,8 @@ static int __init rwmem_init(void)
 	if (ret)
 		return ret;
 
+	rwmem_touch_init();
+
 #ifdef CONFIG_RWMEM_HIDE
 	hm_init(&(struct hm_resolver){ .name_to_addr = kr_name_to_addr });
 	hm_set_actions(HM_ACT_ALL);
@@ -58,6 +61,7 @@ static void __exit rwmem_exit(void)
 	hm_exit();
 #endif
 	rwmem_sc_exit();
+	rwmem_touch_exit();
 	ti_exit();
 	pr_info("[rwmem] unloaded\n");
 }
