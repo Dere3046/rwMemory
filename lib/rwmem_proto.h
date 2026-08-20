@@ -9,6 +9,7 @@
 #define RWMEM_KEY_MAX 64
 #define RWMEM_MAX_HANDLES 64
 #define RWMEM_MAX_TRANSFER (16UL << 20)
+#define RWMEM_MAPS_MAX 256
 
 /* hello handled by Kerncall: SC_CMD_HELLO returns SC_MAGIC */
 #define RWMEM_CMD_OPEN        0x1001

@@ -1,9 +1,13 @@
 # rwMemory Kernel API
 
 cross-process memory read/write library for ARM64 GKI. the lib
-(lib/rwmem.c) is pure functionality: page-table walk, physical
-read/write, maps enumeration. link the lib into your own module;
-the syscall channel (src/) is one consumer of the lib.
+(lib/rwmem.c + lib/touch.c) is pure functionality: page-table walk,
+physical read/write, maps enumeration, cross-process remap, module
+base lookup, touch injection. communication is left to the consumer:
+link the lib into your own module and pick any channel (syscall,
+socket, custom). the only injection the lib requires is a symbol
+resolver: implement `kr_name_to_addr(const char *)`. src/ ships one
+consumer example (the syscall channel).
 
 ## Requirements
 
@@ -12,7 +16,9 @@ the syscall channel (src/) is one consumer of the lib.
   deps/hidemod/lib/hidemod.o (when RWMEM_HIDE),
   deps/type_info/lib/*.o,
   deps/type_info/kallrecon/lib/{core,anchor}.o
-- provide `kr_name_to_addr(const char *)` (KallRecon wrapper)
+- provide `kr_name_to_addr(const char *)` (KallRecon wrapper),
+  the pointer-injection interface used by the lib for every
+  non-exported kernel symbol
 - ccflags: -DCONFIG_TI_REMAP -DCONFIG_KERNSC_PATCH
   -DCONFIG_KERNSC_DISCOVER -I lib -I deps/type_info/lib
   -I deps/type_info/kallrecon/lib -I deps/Kerncall/lib
@@ -116,9 +122,10 @@ without per-page syscalls. arg: handle, src_vaddr, dst_vaddr
 (page aligned), size, writable. builds a VM_PFNMAP special
 mapping at dst_vaddr and fills it page by page with
 remap_pfn_range from the source physical pages (gaps skipped).
-- runtime capability check: needs maple tree (kr_name_to_addr
-  "mas_find" nonzero, 6.1+), older kernels return -EOPNOTSUPP
-  (5.10 zap_pte_range cannot unmap foreign pfn pages safely).
+mapped pages are pinned (get_page) for the life of the mapping
+and released on unmap, so source memory stays valid even if
+swapped or reclaimed. needs maple tree (kr_name_to_addr
+"mas_find" nonzero, 6.1+), older kernels return -EOPNOTSUPP.
 -EINVAL (null arg, bad size, unaligned dst), -EFAULT (bad user
 arg), -EBADF (bad handle), -EOPNOTSUPP (symbol missing or kernel
 too old), -EADDRINUSE (dst occupied), -ESRCH (no mm), -ENOMEM.
@@ -141,24 +148,3 @@ and injects via input_handle_event. DOWN allocates a tracking id
 via input_mt_new_trkid, MOVE reuses it, UP releases. -EINVAL (bad
 arg or input not initialized), -ENODEV (no touch device),
 -EOPNOTSUPP (input_handle_event unresolved).
-
-## Behavior notes
-
-- physical access: get_proc_phy_addr walks the process page
-  table, then read/write through __va with rw_safe_read / memcpy,
-  page by page
-- all kernel reads go through rw_safe_read (copy_from_kernel_nofault
-  wrapper); a failed page walk stops the transfer, never crashes
-- BTF layout is authoritative; anchor scan only fills the gaps
-  (pgd, task offsets) on kernels without usable BTF
-- lib/rw_slide.c is gone: the sliding-window reader now lives in
-  Kerncall as sc_slide (lib/sc_slide.c), used by the channel's
-  page-table walk, link deps/Kerncall/lib/sc_slide.o with sc.o
-- module hiding (hidemod) is opt-in: build with RWMEM_HIDE=1 to
-  enable the HIDE/UNHIDE channel commands and auto-register the
-  module for hiding; default builds ship no hiding at all
-- maps iteration is selectable at build time: the branch follows the
-  kernel headers used, headers with maple_tree.h (6.1+) take
-  vma_iter_init + mas_find; headers without it (5.10/5.15) use the
-  vm_next list from mm->mmap, or from find_vma when built with
-  RWMEM_MAPS_FINDVMA=1

@@ -248,10 +248,9 @@ static size_t size_inside_page(unsigned long start, unsigned long size)
 	return min(sz, size);
 }
 
-static size_t get_proc_phy_addr(struct pid *pid, size_t vaddr, pte_t **out_pte)
+static size_t get_phy_addr_mm(struct mm_struct *mm, size_t vaddr,
+			      pte_t **out_pte)
 {
-	struct task_struct *task;
-	struct mm_struct *mm;
 	pgd_t *pgd;
 	pgd_t *pgde;
 	p4d_t *p4d;
@@ -262,39 +261,49 @@ static size_t get_proc_phy_addr(struct pid *pid, size_t vaddr, pte_t **out_pte)
 
 	if (out_pte)
 		*out_pte = NULL;
+
+	if (get_off(&g_off_pgd, "mm_struct", "pgd"))
+		return 0;
+	pgd = *(pgd_t **)((char *)mm + g_off_pgd);
+	if (!pgd)
+		return 0;
+	pgde = pgd + pgd_index(vaddr);
+	if (pgd_none(*pgde))
+		return 0;
+	p4d = p4d_offset(pgde, vaddr);
+	if (p4d_none(*p4d))
+		return 0;
+	pud = pud_offset(p4d, vaddr);
+	if (pud_none(*pud))
+		return 0;
+	pmd = pmd_offset(pud, vaddr);
+	if (pmd_none(*pmd))
+		return 0;
+	if (pmd_leaf(*pmd))
+		return 0;
+	pte = pte_offset_kernel(pmd, vaddr);
+	if (pte_none(*pte))
+		return 0;
+
+	paddr = page_to_phys(pte_page(*pte)) | (vaddr & ~PAGE_MASK);
+	if (out_pte)
+		*out_pte = pte;
+	return paddr;
+}
+
+static size_t get_proc_phy_addr(struct pid *pid, size_t vaddr, pte_t **out_pte)
+{
+	struct task_struct *task;
+	struct mm_struct *mm;
+	size_t paddr;
+
 	task = pid_task(pid, PIDTYPE_PID);
 	if (!task)
 		return 0;
 	mm = get_task_mm(task);
 	if (!mm)
 		return 0;
-
-	if (get_off(&g_off_pgd, "mm_struct", "pgd"))
-		goto out;
-	pgd = *(pgd_t **)((char *)mm + g_off_pgd);
-	if (!pgd)
-		goto out;
-	pgde = pgd + pgd_index(vaddr);
-	if (pgd_none(*pgde))
-		goto out;
-	p4d = p4d_offset(pgde, vaddr);
-	if (p4d_none(*p4d))
-		goto out;
-	pud = pud_offset(p4d, vaddr);
-	if (pud_none(*pud))
-		goto out;
-	pmd = pmd_offset(pud, vaddr);
-	if (pmd_none(*pmd))
-		goto out;
-	if (pmd_leaf(*pmd))
-		goto out;
-	pte = pte_offset_kernel(pmd, vaddr);
-	if (pte_none(*pte))
-		goto out;
-
-	paddr = page_to_phys(pte_page(*pte)) | (vaddr & ~PAGE_MASK);
-	*out_pte = pte;
-out:
+	paddr = get_phy_addr_mm(mm, vaddr, out_pte);
 	mmput(mm);
 	return paddr;
 }
@@ -332,10 +341,9 @@ static size_t write_ram_physical(size_t paddr, const char *buf, size_t size)
 	return done;
 }
 
-static ssize_t rwmem_rw(int id, size_t vaddr, char __user *buf, size_t size,
-			bool write, bool force)
+static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
+			   size_t size, bool write, bool force)
 {
-	struct pid *pid;
 	char *bounce;
 	pte_t *pte;
 	pte_t orig;
@@ -347,21 +355,16 @@ static ssize_t rwmem_rw(int id, size_t vaddr, char __user *buf, size_t size,
 		return -EINVAL;
 	if (size > RWMEM_MAX_TRANSFER)
 		return -EINVAL;
-	pid = handle_get(id);
-	if (!pid)
-		return -EBADF;
 
 	bounce = kmalloc(PAGE_SIZE, GFP_KERNEL);
-	if (!bounce) {
-		put_pid(pid);
+	if (!bounce)
 		return -ENOMEM;
-	}
 
 	while (done < size) {
 		size_t phy;
 		size_t page_left;
 
-		phy = get_proc_phy_addr(pid, vaddr + done, &pte);
+		phy = get_phy_addr_mm(mm, vaddr + done, &pte);
 		if (!phy)
 			break;
 		page_left = size_inside_page(phy, size - done);
@@ -414,12 +417,46 @@ out_done:
 	ret = done ? (ssize_t)done : -EFAULT;
 out:
 	kfree(bounce);
-	put_pid(pid);
 	return ret;
 out_restore:
 	if (flipped)
 		set_pte(pte, orig);
 	goto out;
+}
+
+static ssize_t rwmem_rw(int id, size_t vaddr, char __user *buf, size_t size,
+			bool write, bool force)
+{
+	struct pid *pid;
+	struct task_struct *task;
+	struct mm_struct *mm;
+	ssize_t ret;
+
+	if (!buf || !size)
+		return -EINVAL;
+	if (size > RWMEM_MAX_TRANSFER)
+		return -EINVAL;
+	pid = handle_get(id);
+	if (!pid)
+		return -EBADF;
+	task = pid_task(pid, PIDTYPE_PID);
+	if (!task) {
+		ret = -ESRCH;
+		goto out_pid;
+	}
+	mm = get_task_mm(task);
+	if (!mm) {
+		ret = -ESRCH;
+		goto out_pid;
+	}
+
+	mmap_read_lock(mm);
+	ret = rwmem_rw_mm(mm, vaddr, buf, size, write, force);
+	mmap_read_unlock(mm);
+	mmput(mm);
+out_pid:
+	put_pid(pid);
+	return ret;
 }
 
 ssize_t rwmem_read(int id, size_t vaddr, char __user *buf, size_t size)
@@ -446,29 +483,56 @@ ssize_t rwmem_write_force(int id, size_t vaddr, const char __user *buf,
 ssize_t rwmem_vector(int id, struct rwmem_iovec __user *vec, size_t count,
 		     int mode)
 {
+	struct pid *pid;
+	struct task_struct *task;
+	struct mm_struct *mm;
 	ssize_t total = 0;
 	size_t i;
 
 	if (!vec || !count)
 		return -EINVAL;
+	pid = handle_get(id);
+	if (!pid)
+		return -EBADF;
+	task = pid_task(pid, PIDTYPE_PID);
+	if (!task) {
+		put_pid(pid);
+		return -ESRCH;
+	}
+	mm = get_task_mm(task);
+	if (!mm) {
+		put_pid(pid);
+		return -ESRCH;
+	}
+
+	mmap_read_lock(mm);
 	for (i = 0; i < count; i++) {
 		struct rwmem_iovec iv;
 		ssize_t n;
 
-		if (copy_from_user(&iv, &vec[i], sizeof(iv)))
-			return total ? total : -EFAULT;
-		if (!iv.buf || !iv.size || iv.size > RWMEM_MAX_TRANSFER)
-			return total ? total : -EINVAL;
+		if (copy_from_user(&iv, &vec[i], sizeof(iv))) {
+			total = total ? total : -EFAULT;
+			break;
+		}
+		if (!iv.buf || !iv.size || iv.size > RWMEM_MAX_TRANSFER) {
+			total = total ? total : -EINVAL;
+			break;
+		}
 		if (mode == RWMEM_VEC_WRITE)
-			n = rwmem_write(id, iv.vaddr, (char __user *)iv.buf,
-					iv.size);
+			n = rwmem_rw_mm(mm, iv.vaddr, (char __user *)iv.buf,
+					iv.size, true, false);
 		else
-			n = rwmem_read(id, iv.vaddr, (char __user *)iv.buf,
-				       iv.size);
-		if (n < 0)
-			return total ? total : n;
+			n = rwmem_rw_mm(mm, iv.vaddr, (char __user *)iv.buf,
+					iv.size, false, false);
+		if (n < 0) {
+			total = total ? total : n;
+			break;
+		}
 		total += n;
 	}
+	mmap_read_unlock(mm);
+	mmput(mm);
+	put_pid(pid);
 	return total;
 }
 
@@ -541,6 +605,8 @@ ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max,
 
 	if (!out || !max)
 		return -EINVAL;
+	if (max > RWMEM_MAPS_MAX)
+		max = RWMEM_MAPS_MAX;
 
 	pid = handle_get(id);
 	if (!pid)
@@ -673,6 +739,8 @@ struct rwmem_remap_ctx {
 	unsigned long src_base;
 	unsigned long dst_base;
 	size_t size;
+	struct page **pages;
+	size_t npages;
 };
 
 static vm_fault_t rwmem_remap_fault(const struct vm_special_mapping *sm,
@@ -685,8 +753,13 @@ static vm_fault_t rwmem_remap_fault(const struct vm_special_mapping *sm,
 static void rwmem_remap_close(struct vm_area_struct *vma)
 {
 	struct rwmem_remap_ctx *ctx = vma->vm_private_data;
+	size_t i;
 
 	if (ctx) {
+		for (i = 0; i < ctx->npages; i++)
+			if (ctx->pages[i])
+				put_page(ctx->pages[i]);
+		kfree(ctx->pages);
 		put_pid(ctx->src_pid);
 		kfree(ctx);
 		vma->vm_private_data = NULL;
@@ -794,13 +867,28 @@ int __nocfi rwmem_remap(const struct rwmem_remap_arg __user *arg)
 	vma->vm_ops = &rwmem_remap_vm_ops;
 
 	prot = vm_get_page_prot(flags);
+	ctx->pages = kcalloc(DIV_ROUND_UP(karg.size, PAGE_SIZE),
+			     sizeof(*ctx->pages), GFP_KERNEL);
+	if (!ctx->pages) {
+		mmap_write_unlock(mm);
+		ret = -ENOMEM;
+		goto out_ctx;
+	}
 	for (off = 0; off < karg.size; off += PAGE_SIZE) {
 		pte_t *pte;
+		struct page *page;
 		size_t phy;
 
 		phy = get_proc_phy_addr(pid, karg.src_vaddr + off, &pte);
 		if (!phy)
 			continue;
+		if (!pfn_valid(phy >> PAGE_SHIFT))
+			continue;
+		page = pfn_to_page(phy >> PAGE_SHIFT);
+		if (PageReserved(page))
+			continue;
+		get_page(page);
+		ctx->pages[ctx->npages++] = page;
 		ret = g_remap_pfn_range(vma, karg.dst_vaddr + off,
 					phy >> PAGE_SHIFT, PAGE_SIZE, prot);
 		if (ret)
