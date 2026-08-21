@@ -1,13 +1,14 @@
 # rwMemory Kernel API
 
 cross-process memory read/write library for ARM64 GKI. the lib
-(lib/rwmem.c + lib/touch.c) is pure functionality: page-table walk,
-physical read/write, maps enumeration, cross-process remap, module
-base lookup, touch injection. communication is left to the consumer:
-link the lib into your own module and pick any channel (syscall,
-socket, custom). the only injection the lib requires is a symbol
-resolver: implement `kr_name_to_addr(const char *)`. src/ ships one
-consumer example (the syscall channel).
+(lib/rwmem.c + lib/touch.c + lib/dmabuf.c) is pure functionality:
+page-table walk, physical read/write, maps enumeration, cross-process
+remap, module base lookup, touch injection, dma-buf export.
+communication is left to the consumer: link the lib into your own
+module and pick any channel (syscall, socket, custom). the only
+injection the lib requires is a symbol resolver: implement
+`kr_name_to_addr(const char *)`. src/ ships one consumer example (the
+syscall channel).
 
 ## Requirements
 
@@ -148,3 +149,13 @@ and injects via input_handle_event. DOWN allocates a tracking id
 via input_mt_new_trkid, MOVE reuses it, UP releases. -EINVAL (bad
 arg or input not initialized), -ENODEV (no touch device),
 -EOPNOTSUPP (input_handle_event unresolved).
+
+**int rwmem_dmabuf_export(const struct rwmem_dmabuf_arg __user *arg)**
+
+export source process memory as a dma-buf. arg: handle, vaddr,
+size, out_fd. pins the source pages (get_page), builds a dma-buf
+(sg_table + mmap fault mapping), returns an fd the caller can
+mmap(MAP_SHARED) for zero-copy native access, or hand to other
+processes/devices. -EINVAL (bad arg), -EBADF (bad handle), -ESRCH
+(no task/mm), -ENOMEM, -EFAULT (no mapped pages). requires
+MODULE_IMPORT_NS(DMA_BUF).
