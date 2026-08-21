@@ -9,7 +9,7 @@ rwmem-y := src/rwmem_main.o src/rwmem_sc.o lib/rwmem.o lib/touch.o \
 	deps/Type_info/lib/reg.o deps/Type_info/lib/lib.o \
 	deps/Type_info/lib/anchor.o deps/Type_info/lib/dwarf.o \
 	deps/KallRecon/lib/core.o \
-	deps/KallRecon/lib/slide.o deps/KallRecon/lib/anchor.o
+	deps/KallRecon/lib/anchor.o
 
 ccflags-y += -std=gnu11
 ccflags-y += -Wno-declaration-after-statement
