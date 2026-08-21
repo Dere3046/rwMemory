@@ -178,7 +178,7 @@ done:
 	return 0;
 }
 
-static struct pid *handle_get(int id)
+struct pid *rwmem_handle_get(int id)
 {
 	struct pid *pid = NULL;
 
@@ -248,7 +248,7 @@ static size_t size_inside_page(unsigned long start, unsigned long size)
 	return min(sz, size);
 }
 
-static size_t get_phy_addr_mm(struct mm_struct *mm, size_t vaddr,
+size_t rwmem_phy_addr(struct mm_struct *mm, size_t vaddr,
 			      pte_t **out_pte)
 {
 	pgd_t *pgd;
@@ -303,7 +303,7 @@ static size_t get_proc_phy_addr(struct pid *pid, size_t vaddr, pte_t **out_pte)
 	mm = get_task_mm(task);
 	if (!mm)
 		return 0;
-	paddr = get_phy_addr_mm(mm, vaddr, out_pte);
+	paddr = rwmem_phy_addr(mm, vaddr, out_pte);
 	mmput(mm);
 	return paddr;
 }
@@ -364,7 +364,7 @@ static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 		size_t phy;
 		size_t page_left;
 
-		phy = get_phy_addr_mm(mm, vaddr + done, &pte);
+		phy = rwmem_phy_addr(mm, vaddr + done, &pte);
 		if (!phy)
 			break;
 		page_left = size_inside_page(phy, size - done);
@@ -436,7 +436,7 @@ static ssize_t rwmem_rw(int id, size_t vaddr, char __user *buf, size_t size,
 		return -EINVAL;
 	if (size > RWMEM_MAX_TRANSFER)
 		return -EINVAL;
-	pid = handle_get(id);
+	pid = rwmem_handle_get(id);
 	if (!pid)
 		return -EBADF;
 	task = pid_task(pid, PIDTYPE_PID);
@@ -491,7 +491,7 @@ ssize_t rwmem_vector(int id, struct rwmem_iovec __user *vec, size_t count,
 
 	if (!vec || !count)
 		return -EINVAL;
-	pid = handle_get(id);
+	pid = rwmem_handle_get(id);
 	if (!pid)
 		return -EBADF;
 	task = pid_task(pid, PIDTYPE_PID);
@@ -608,7 +608,7 @@ ssize_t rwmem_query_maps(int id, struct rwmem_map __user *out, size_t max,
 	if (max > RWMEM_MAPS_MAX)
 		max = RWMEM_MAPS_MAX;
 
-	pid = handle_get(id);
+	pid = rwmem_handle_get(id);
 	if (!pid)
 		return -EBADF;
 	task = pid_task(pid, PIDTYPE_PID);
@@ -711,7 +711,7 @@ ssize_t rwmem_get_cmdline(int id, struct rwmem_cmdline __user *out)
 	if (get_off(&g_off_arg_start, "mm_struct", "arg_start"))
 		return -EOPNOTSUPP;
 
-	pid = handle_get(id);
+	pid = rwmem_handle_get(id);
 	if (!pid)
 		return -EBADF;
 	task = pid_task(pid, PIDTYPE_PID);
@@ -804,8 +804,9 @@ int __nocfi rwmem_remap(const struct rwmem_remap_arg __user *arg)
 	if (!karg.size || karg.size > RWMEM_MAX_TRANSFER ||
 	    (karg.dst_vaddr & ~PAGE_MASK))
 		return -EINVAL;
+	karg.size = round_up(karg.size, PAGE_SIZE);
 
-	pid = handle_get(karg.handle);
+	pid = rwmem_handle_get(karg.handle);
 	if (!pid)
 		return -EBADF;
 
@@ -842,7 +843,7 @@ int __nocfi rwmem_remap(const struct rwmem_remap_arg __user *arg)
 	}
 	mmap_write_lock(mm);
 	if (find_vma(mm, karg.dst_vaddr) &&
-	    find_vma(mm, karg.dst_vaddr)->vm_start <=
+	    find_vma(mm, karg.dst_vaddr)->vm_start <
 		    karg.dst_vaddr + karg.size) {
 		mmap_write_unlock(mm);
 		ret = -EADDRINUSE;
@@ -923,7 +924,7 @@ int rwmem_get_base(const struct rwmem_base_arg __user *arg)
 		return -EFAULT;
 	karg.name[sizeof(karg.name) - 1] = 0;
 
-	pid = handle_get(karg.handle);
+	pid = rwmem_handle_get(karg.handle);
 	if (!pid)
 		return -EBADF;
 	task = pid_task(pid, PIDTYPE_PID);

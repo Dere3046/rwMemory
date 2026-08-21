@@ -15,6 +15,7 @@
 #include "rwmem_proto.h"
 #include "rwmem.h"
 #include "touch.h"
+#include "dmabuf.h"
 #include "rwmem_sc.h"
 
 extern unsigned long kr_name_to_addr(const char *name);
@@ -109,6 +110,9 @@ static long rwmem_handler(const struct pt_regs *regs)
 		return rwmem_get_base((struct rwmem_base_arg __user *)regs->regs[2]);
 	case RWMEM_CMD_TOUCH:
 		return rwmem_touch((struct rwmem_touch_arg __user *)regs->regs[2]);
+	case RWMEM_CMD_DMABUF:
+		return rwmem_dmabuf_export((struct rwmem_dmabuf_arg __user *)
+					   regs->regs[2]);
 #ifdef CONFIG_RWMEM_HIDE
 	case RWMEM_CMD_HIDE:
 		return hm_hide();

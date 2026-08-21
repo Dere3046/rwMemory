@@ -28,6 +28,7 @@
 #define RWMEM_CMD_REMAP       0x1400
 #define RWMEM_CMD_GET_BASE    0x1500
 #define RWMEM_CMD_TOUCH       0x1600
+#define RWMEM_CMD_DMABUF      0x1700
 
 #define RWMEM_TOUCH_DOWN 0
 #define RWMEM_TOUCH_MOVE 1
@@ -52,6 +53,13 @@ struct rwmem_touch_arg {
 	int x;
 	int y;
 	int slot;
+};
+
+struct rwmem_dmabuf_arg {
+	int handle;
+	unsigned long vaddr;
+	size_t size;
+	int out_fd;
 };
 
 #ifdef CONFIG_RWMEM_HIDE

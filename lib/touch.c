@@ -34,8 +34,12 @@ struct rwmem_event_pool {
 typedef void (*hm_input_handle_event)(struct input_dev *dev,
 				      unsigned int type, unsigned int code,
 				      int value);
+typedef int (*hm_register_kprobe)(struct kprobe *p);
+typedef void (*hm_unregister_kprobe)(struct kprobe *p);
 
 static hm_input_handle_event g_input_handle_event;
+static hm_register_kprobe g_register_kprobe;
+static hm_unregister_kprobe g_unregister_kprobe;
 static struct rwmem_event_pool *g_pool;
 static struct input_dev *g_touch_dev;
 
@@ -96,9 +100,7 @@ static int input_event_pre(struct kprobe *p, struct pt_regs *regs)
 static struct kprobe g_input_event_kp = {
 	.symbol_name = "input_event",
 	.pre_handler = input_event_pre,
-};
-
-static int input_inject_event_pre(struct kprobe *p, struct pt_regs *regs)
+};static int input_inject_event_pre(struct kprobe *p, struct pt_regs *regs)
 {
 	struct input_handle *handle;
 
@@ -200,29 +202,37 @@ int __nocfi rwmem_touch(const struct rwmem_touch_arg __user *arg)
 	return 0;
 }
 
-int rwmem_touch_init(void)
+int __nocfi rwmem_touch_init(void)
 {
 	g_input_handle_event = (hm_input_handle_event)
 		kr_name_to_addr("input_handle_event");
 	if (!g_input_handle_event)
 		return -EOPNOTSUPP;
+	g_register_kprobe = (hm_register_kprobe)
+		kr_name_to_addr("register_kprobe");
+	g_unregister_kprobe = (hm_unregister_kprobe)
+		kr_name_to_addr("unregister_kprobe");
 
 	g_pool = kzalloc(sizeof(*g_pool), GFP_KERNEL);
 	if (!g_pool)
 		return -ENOMEM;
 	spin_lock_init(&g_pool->event_lock);
 
-	if (register_kprobe(&g_input_event_kp))
-		pr_warn("[rwmem] input_event kprobe failed\n");
-	if (register_kprobe(&g_input_inject_event_kp))
-		pr_warn("[rwmem] input_inject_event kprobe failed\n");
+	if (g_register_kprobe) {
+		if (g_register_kprobe(&g_input_event_kp))
+			pr_warn("[rwmem] input_event kprobe failed\n");
+		if (g_register_kprobe(&g_input_inject_event_kp))
+			pr_warn("[rwmem] input_inject_event kprobe failed\n");
+	}
 	return 0;
 }
 
-void rwmem_touch_exit(void)
+void __nocfi rwmem_touch_exit(void)
 {
-	unregister_kprobe(&g_input_event_kp);
-	unregister_kprobe(&g_input_inject_event_kp);
+	if (g_unregister_kprobe) {
+		g_unregister_kprobe(&g_input_event_kp);
+		g_unregister_kprobe(&g_input_inject_event_kp);
+	}
 	kfree(g_pool);
 	g_pool = NULL;
 	g_touch_dev = NULL;

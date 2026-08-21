@@ -12,6 +12,9 @@
 
 int rw_safe_read(void *dst, const void *src, size_t sz);
 
+struct pid *rwmem_handle_get(int id);
+size_t rwmem_phy_addr(struct mm_struct *mm, size_t vaddr, pte_t **out_pte);
+
 int rwmem_pgd_off(u32 *out);
 int rwmem_open(pid_t pid);
 void rwmem_close(int id);
@@ -29,5 +32,6 @@ ssize_t rwmem_get_cmdline(int id, struct rwmem_cmdline __user *out);
 int rwmem_remap(const struct rwmem_remap_arg __user *arg);
 int rwmem_get_base(const struct rwmem_base_arg __user *arg);
 int rwmem_touch(const struct rwmem_touch_arg __user *arg);
+int rwmem_dmabuf_export(const struct rwmem_dmabuf_arg __user *arg);
 
 #endif

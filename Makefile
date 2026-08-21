@@ -1,6 +1,7 @@
 obj-m := rwmem.o
 
 rwmem-y := src/rwmem_main.o src/rwmem_sc.o lib/rwmem.o lib/touch.o \
+	lib/dmabuf.o \
 	deps/Kerncall/lib/sc.o deps/Kerncall/lib/sc_slide.o \
 	deps/hidemod/lib/hidemod.o \
 	deps/type_info/lib/port.o deps/type_info/lib/slide.o \
