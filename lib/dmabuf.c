@@ -6,10 +6,15 @@
 #include <linux/kernel.h>
 #include <linux/dma-buf.h>
 #include <linux/module.h>
+#include <linux/version.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+MODULE_IMPORT_NS("DMA_BUF");
+#else
 MODULE_IMPORT_NS(DMA_BUF);
+#endif
 
 #include "rwmem_proto.h"
 #include "rwmem.h"

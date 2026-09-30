@@ -15,6 +15,7 @@
 #include <linux/fs.h>
 #include <linux/dcache.h>
 #include <linux/string.h>
+#include <linux/version.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
 
@@ -341,6 +342,49 @@ static size_t write_ram_physical(size_t paddr, const char *buf, size_t size)
 	return done;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+typedef void (*rwmem_mte_sync_tags_fn)(pte_t pte, unsigned int nr_pages);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+typedef void (*rwmem_mte_sync_tags_fn)(pte_t pte);
+#else
+typedef void (*rwmem_mte_sync_tags_fn)(pte_t old_pte, pte_t pte);
+#endif
+
+/*
+ * mte_sync_tags is exported only from 6.12 on, older GKI kernels need a
+ * runtime resolve; its prototype changed with the page table rework
+ */
+static void __nocfi rwmem_mte_sync_tags(pte_t old, pte_t pte)
+{
+	static rwmem_mte_sync_tags_fn fn;
+
+	if (!fn) {
+		fn = (rwmem_mte_sync_tags_fn)kr_name_to_addr("mte_sync_tags");
+		if (!fn)
+			return;
+	}
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+	fn(pte, 1);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+	fn(pte);
+#else
+	fn(old, pte);
+#endif
+}
+
+static void rwmem_set_pte_at(pte_t *ptep, pte_t pte)
+{
+	pte_t old = READ_ONCE(*ptep);
+
+	if (pte_present(pte) && pte_user_exec(pte) && !pte_special(pte))
+		__sync_icache_dcache(pte);
+	if (system_supports_mte() && pte_access_permitted(pte, false) &&
+	    !pte_special(pte) && pte_tagged(pte))
+		rwmem_mte_sync_tags(old, pte);
+
+	set_pte(ptep, pte);
+}
+
 static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 			   size_t size, bool write, bool force)
 {
@@ -374,7 +418,7 @@ static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 		orig = *pte;
 		flipped = false;
 		if (force && !write && !(pte_val(*pte) & PTE_USER)) {
-			set_pte(pte, __pte(pte_val(*pte) | PTE_USER));
+			rwmem_set_pte_at(pte, __pte(pte_val(*pte) | PTE_USER));
 			dsb(ish);
 			flipped = true;
 		} else if (write && !force && !pte_write(*pte)) {
@@ -383,8 +427,8 @@ static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 			ret = -EPERM;
 			goto out;
 		} else if (force && write && !pte_write(*pte)) {
-			set_pte(pte, __pte((pte_val(*pte) | PTE_DBM) &
-					    ~PTE_RDONLY));
+			rwmem_set_pte_at(pte, __pte((pte_val(*pte) | PTE_DBM) &
+						    ~PTE_RDONLY));
 			dsb(ish);
 			flipped = true;
 		}
@@ -410,7 +454,7 @@ static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 		}
 
 		if (flipped)
-			set_pte(pte, orig);
+			rwmem_set_pte_at(pte, orig);
 		done += page_left;
 	}
 out_done:
@@ -420,7 +464,7 @@ out:
 	return ret;
 out_restore:
 	if (flipped)
-		set_pte(pte, orig);
+		rwmem_set_pte_at(pte, orig);
 	goto out;
 }
 
@@ -576,7 +620,7 @@ ssize_t rwmem_pid_list(pid_t __user *buf, size_t max)
 static int map_path(struct vm_area_struct *vma, char *out, size_t outsz)
 {
 	struct file *file;
-	struct path *pathp;
+	const struct path *pathp;
 
 	file = vma->vm_file;
 	if (!file)

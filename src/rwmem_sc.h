@@ -9,4 +9,6 @@
 int rwmem_sc_init(void);
 void rwmem_sc_exit(void);
 
+unsigned long __nocfi kr_name_to_addr(const char *name);
+
 #endif

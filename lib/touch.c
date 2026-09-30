@@ -62,7 +62,7 @@ static void input_event_cache(unsigned int type, unsigned int code, int value)
 	spin_unlock_irqrestore(&g_pool->event_lock, flags);
 }
 
-static void handle_cache_events(struct input_dev *dev)
+static void __nocfi handle_cache_events(struct input_dev *dev)
 {
 	struct rwmem_touch_event event;
 	unsigned long flags, flags2;

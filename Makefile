@@ -3,8 +3,15 @@ obj-m := rwmem.o
 rwmem-y := src/rwmem_main.o src/rwmem_sc.o lib/rwmem.o lib/touch.o \
 	lib/dmabuf.o \
 	deps/KernCall/lib/sc.o deps/KernCall/lib/sc_slide.o \
+	deps/KernCall/lib/sc_sock.o \
+	deps/HooKern/lib/hk.o deps/HooKern/lib/hk_ksym.o \
+	deps/HooKern/lib/hk_patch.o deps/HooKern/lib/hk_flush.o \
+	deps/HooKern/lib/hk_ptr.o deps/HooKern/lib/hk_inline.o \
+	deps/HooKern/lib/hk_kprobe.o deps/HooKern/lib/hk_kretprobe.o \
+	deps/HooKern/lib/hk_sighook.o deps/HooKern/lib/hk_cfi.o \
+	deps/HooKern/lib/hk_binder.o \
 	deps/hidemod/lib/hidemod.o \
-	deps/Type_info/lib/port.o deps/Type_info/lib/slide.o \
+	deps/Type_info/lib/port.o \
 	deps/Type_info/lib/btf.o deps/Type_info/lib/query.o \
 	deps/Type_info/lib/reg.o deps/Type_info/lib/lib.o \
 	deps/Type_info/lib/anchor.o deps/Type_info/lib/dwarf.o \
@@ -28,6 +35,7 @@ ifdef RWMEM_MAPS_FINDVMA
 ccflags-y += -DCONFIG_RWMEM_MAPS_FINDVMA
 endif
 ccflags-y += -I$(src)/lib
+ccflags-y += -I$(src)/deps/HooKern/lib
 ccflags-y += -I$(src)/deps/KernCall/lib
 ccflags-y += -I$(src)/deps/hidemod/lib
 ccflags-y += -I$(src)/deps/Type_info/lib
@@ -42,9 +50,10 @@ $(info -- MDIR: $(MDIR))
 $(info -- ODIR: $(ODIR))
 
 all:
-	make -C $(KDIR) M=$(ODIR) src=$(MDIR) modules
+	mkdir -p $(ODIR)
+	make -C $(KDIR) M=$(ODIR) src=$(MDIR) srcroot=$(MDIR) modules
 clean:
-	make -C $(KDIR) M=$(ODIR) src=$(MDIR) clean
+	make -C $(KDIR) M=$(ODIR) src=$(MDIR) srcroot=$(MDIR) clean
 
 $(obj)/%.o: $(src)/%.c $(recordmcount_source) FORCE
 	$(call if_changed_rule,cc_o_c)
