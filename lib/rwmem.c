@@ -269,21 +269,29 @@ size_t rwmem_phy_addr(struct mm_struct *mm, size_t vaddr,
 	if (!pgd)
 		return 0;
 	pgde = pgd + pgd_index(vaddr);
-	if (pgd_none(*pgde))
+	if (pgd_none(*pgde) || pgd_bad(*pgde))
 		return 0;
 	p4d = p4d_offset(pgde, vaddr);
-	if (p4d_none(*p4d))
+	if (p4d_none(*p4d) || p4d_bad(*p4d))
 		return 0;
 	pud = pud_offset(p4d, vaddr);
-	if (pud_none(*pud))
+	if (pud_none(*pud) || pud_bad(*pud))
 		return 0;
 	pmd = pmd_offset(pud, vaddr);
-	if (pmd_none(*pmd))
+	if (pmd_none(*pmd) || pmd_bad(*pmd))
 		return 0;
 	if (pmd_leaf(*pmd))
 		return 0;
 	pte = pte_offset_kernel(pmd, vaddr);
-	if (pte_none(*pte))
+	/*
+	 * none is not the only unusable state. a vendor kernel can leave an entry
+	 * that is marked but not present, and pte_page on it would name a page
+	 * that does not exist, so the frame would come out of whatever the entry
+	 * happens to hold. present and a frame the kernel owns are both required
+	 */
+	if (pte_none(*pte) || !pte_present(*pte))
+		return 0;
+	if (!pfn_valid(pte_pfn(*pte)))
 		return 0;
 
 	paddr = page_to_phys(pte_page(*pte)) | (vaddr & ~PAGE_MASK);
@@ -333,7 +341,13 @@ static size_t write_ram_physical(size_t paddr, const char *buf, size_t size)
 	while (size > 0) {
 		size_t sz = size_inside_page(paddr, size);
 
-		memcpy(__va(paddr), buf, sz);
+		/*
+		 * the read side is nofault and the write side has to be too: a frame
+		 * that turned out to be unusable would otherwise fault here instead of
+		 * being reported
+		 */
+		if (copy_to_kernel_nofault(__va(paddr), buf, sz))
+			break;
 		buf += sz;
 		paddr += sz;
 		size -= sz;
