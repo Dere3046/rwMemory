@@ -144,7 +144,7 @@ static int __nocfi rwmem_dmabuf_export_do(struct pid *pid, unsigned long vaddr,
 		size_t phy;
 		struct page *page;
 
-		phy = rwmem_phy_addr(mm, vaddr + off, &pte);
+		phy = rwmem_phy_addr(mm, vaddr + off, &pte, NULL);
 		if (!phy)
 			continue;
 		if (!pfn_valid(phy >> PAGE_SHIFT))

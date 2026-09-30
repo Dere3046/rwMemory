@@ -13,7 +13,8 @@
 int rw_safe_read(void *dst, const void *src, size_t sz);
 
 struct pid *rwmem_handle_get(int id);
-size_t rwmem_phy_addr(struct mm_struct *mm, size_t vaddr, pte_t **out_pte);
+size_t rwmem_phy_addr(struct mm_struct *mm, size_t vaddr, pte_t **out_pte,
+		      pmd_t **out_pmd);
 
 int rwmem_pgd_off(u32 *out);
 int rwmem_open(pid_t pid);

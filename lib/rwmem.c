@@ -249,8 +249,8 @@ static size_t size_inside_page(unsigned long start, unsigned long size)
 	return min(sz, size);
 }
 
-size_t rwmem_phy_addr(struct mm_struct *mm, size_t vaddr,
-			      pte_t **out_pte)
+size_t rwmem_phy_addr(struct mm_struct *mm, size_t vaddr, pte_t **out_pte,
+		      pmd_t **out_pmd)
 {
 	pgd_t *pgd;
 	pgd_t *pgde;
@@ -297,10 +297,13 @@ size_t rwmem_phy_addr(struct mm_struct *mm, size_t vaddr,
 	paddr = page_to_phys(pte_page(*pte)) | (vaddr & ~PAGE_MASK);
 	if (out_pte)
 		*out_pte = pte;
+	if (out_pmd)
+		*out_pmd = pmd;
 	return paddr;
 }
 
-static size_t get_proc_phy_addr(struct pid *pid, size_t vaddr, pte_t **out_pte)
+static size_t get_proc_phy_addr(struct pid *pid, size_t vaddr, pte_t **out_pte,
+				pmd_t **out_pmd)
 {
 	struct task_struct *task;
 	struct mm_struct *mm;
@@ -312,7 +315,7 @@ static size_t get_proc_phy_addr(struct pid *pid, size_t vaddr, pte_t **out_pte)
 	mm = get_task_mm(task);
 	if (!mm)
 		return 0;
-	paddr = rwmem_phy_addr(mm, vaddr, out_pte);
+	paddr = rwmem_phy_addr(mm, vaddr, out_pte, out_pmd);
 	mmput(mm);
 	return paddr;
 }
@@ -399,11 +402,64 @@ static void rwmem_set_pte_at(pte_t *ptep, pte_t pte)
 	set_pte(ptep, pte);
 }
 
+/*
+ * the kernel's flush_tlb_mm is inline asm plus a call into the mmu notifier
+ * chain, and that call is not exported, so the invalidation is written out here.
+ * the secondary tlb hook only matters for a mm that registered a notifier, which
+ * the kernel itself skips when there is none
+ */
+static void rwmem_flush_tlb_mm(struct mm_struct *mm)
+{
+	unsigned long asid = __TLBI_VADDR(0, ASID(mm));
+
+	dsb(ishst);
+	__tlbi(aside1is, asid);
+	__tlbi_user(aside1is, asid);
+	dsb(ish);
+}
+
+/*
+ * a pte of a live mm is only ever touched under its own lock, the way the
+ * kernel does it, and the translation the cpu may hold is dropped right after
+ */
+static pte_t rwmem_flip_locked(struct mm_struct *mm, pmd_t *pmd,
+			       unsigned long addr, bool write)
+{
+	spinlock_t *ptl;
+	pte_t *ptep;
+	pte_t cur;
+	pte_t next;
+
+	ptep = pte_offset_map_lock(mm, pmd, addr, &ptl);
+	cur = *ptep;
+	if (write)
+		next = __pte((pte_val(cur) | PTE_DBM) & ~PTE_RDONLY);
+	else
+		next = __pte(pte_val(cur) | PTE_USER);
+	rwmem_set_pte_at(ptep, next);
+	pte_unmap_unlock(ptep, ptl);
+	rwmem_flush_tlb_mm(mm);
+	return cur;
+}
+
+static void rwmem_restore_locked(struct mm_struct *mm, pmd_t *pmd,
+				 unsigned long addr, pte_t orig)
+{
+	spinlock_t *ptl;
+	pte_t *ptep;
+
+	ptep = pte_offset_map_lock(mm, pmd, addr, &ptl);
+	rwmem_set_pte_at(ptep, orig);
+	pte_unmap_unlock(ptep, ptl);
+	rwmem_flush_tlb_mm(mm);
+}
+
 static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 			   size_t size, bool write, bool force)
 {
 	char *bounce;
 	pte_t *pte;
+	pmd_t *pmd;
 	pte_t orig;
 	bool flipped;
 	size_t done = 0;
@@ -422,7 +478,7 @@ static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 		size_t phy;
 		size_t page_left;
 
-		phy = rwmem_phy_addr(mm, vaddr + done, &pte);
+		phy = rwmem_phy_addr(mm, vaddr + done, &pte, &pmd);
 		if (!phy)
 			break;
 		page_left = size_inside_page(phy, size - done);
@@ -432,8 +488,7 @@ static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 		orig = *pte;
 		flipped = false;
 		if (force && !write && !(pte_val(*pte) & PTE_USER)) {
-			rwmem_set_pte_at(pte, __pte(pte_val(*pte) | PTE_USER));
-			dsb(ish);
+			orig = rwmem_flip_locked(mm, pmd, vaddr + done, false);
 			flipped = true;
 		} else if (write && !force && !pte_write(*pte)) {
 			if (done)
@@ -441,9 +496,7 @@ static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 			ret = -EPERM;
 			goto out;
 		} else if (force && write && !pte_write(*pte)) {
-			rwmem_set_pte_at(pte, __pte((pte_val(*pte) | PTE_DBM) &
-						    ~PTE_RDONLY));
-			dsb(ish);
+			orig = rwmem_flip_locked(mm, pmd, vaddr + done, true);
 			flipped = true;
 		}
 
@@ -468,7 +521,7 @@ static ssize_t rwmem_rw_mm(struct mm_struct *mm, size_t vaddr, char __user *buf,
 		}
 
 		if (flipped)
-			rwmem_set_pte_at(pte, orig);
+			rwmem_restore_locked(mm, pmd, vaddr + done, orig);
 		done += page_left;
 	}
 out_done:
@@ -478,7 +531,7 @@ out:
 	return ret;
 out_restore:
 	if (flipped)
-		rwmem_set_pte_at(pte, orig);
+		rwmem_restore_locked(mm, pmd, vaddr + done, orig);
 	goto out;
 }
 
@@ -938,7 +991,7 @@ int __nocfi rwmem_remap(const struct rwmem_remap_arg __user *arg)
 		struct page *page;
 		size_t phy;
 
-		phy = get_proc_phy_addr(pid, karg.src_vaddr + off, &pte);
+		phy = get_proc_phy_addr(pid, karg.src_vaddr + off, &pte, NULL);
 		if (!phy)
 			continue;
 		if (!pfn_valid(phy >> PAGE_SHIFT))
