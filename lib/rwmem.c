@@ -449,7 +449,11 @@ static void rwmem_restore_locked(struct mm_struct *mm, pmd_t *pmd,
 	pte_t *ptep;
 
 	ptep = pte_offset_map_lock(mm, pmd, addr, &ptl);
-	rwmem_set_pte_at(ptep, orig);
+	/*
+	 * only the bits this helper moved go back: writing the saved descriptor whole
+	 * would drop the dirty and young bits the store just set
+	 */
+	rwmem_set_pte_at(ptep, __pte(pte_val(READ_ONCE(*ptep)) | PTE_RDONLY));
 	pte_unmap_unlock(ptep, ptl);
 	rwmem_flush_tlb_mm(mm);
 }
