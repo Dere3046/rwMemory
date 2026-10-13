@@ -6,6 +6,8 @@ on:
       - 'src/**'
       - 'User/**'
       - 'Makefile'
+      - 'deps.lst'
+      - '.sdk-version'
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
