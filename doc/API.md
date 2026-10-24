@@ -1,29 +1,27 @@
 # rwMemory Kernel API
 
 cross-process memory read/write library for ARM64 GKI. the lib
-(lib/rwmem.c + lib/touch.c + lib/dmabuf.c) is pure functionality:
-page-table walk, physical read/write, maps enumeration, cross-process
-remap, module base lookup, touch injection, dma-buf export.
-communication is left to the consumer: link the lib into your own
-module and pick any channel (syscall, socket, custom). the only
-injection the lib requires is a symbol resolver: implement
-`kr_name_to_addr(const char *)`. src/ ships one consumer example (the
-syscall channel).
+(lib/rwmem.c + lib/rwmem_req.c + lib/touch.c + lib/dmabuf.c) is pure
+functionality: page-table walk, physical read/write, maps enumeration,
+cross-process remap, module base lookup, touch injection, dma-buf
+export, plus the request table of the protocol. communication is left
+to the consumer: the lib never installs a channel. link it into your
+module and pick any channel (syscall slot, socket, cdev, procfs).
+src/ ships the syscall channel the rwMemory module itself uses, a
+consumer may reuse it or write its own.
 
 ## Requirements
 
-- link these objects into your module (see rwMM Makefile):
-  deps/Kerncall/lib/sc.o, deps/Kerncall/lib/sc_slide.o,
-  deps/hidemod/lib/hidemod.o (when RWMEM_HIDE),
-  deps/type_info/lib/*.o,
-  deps/type_info/kallrecon/lib/{core,anchor}.o
-- provide `kr_name_to_addr(const char *)` (KallRecon wrapper),
-  the pointer-injection interface used by the lib for every
-  non-exported kernel symbol
+- deps.mk exposes the objects (lib/rwmem.o lib/rwmem_req.o
+  lib/dmabuf.o lib/touch.o src/rwmem_sc.o), the include dirs (lib and
+  src) and the deps (KernCall, Type_info). the transport object is
+  only linked in, the slot is patched only when rwmem_sc_init runs
+- inject a resolver at init: struct rwmem_resolver { name_to_addr }.
+  the lib calls it for every non-exported kernel symbol, the call
+  site is __nocfi so a __nocfi resolver works too
 - ccflags: -DCONFIG_TI_REMAP -DCONFIG_KERNSC_PATCH
-  -DCONFIG_KERNSC_DISCOVER -I lib -I deps/type_info/lib
-  -I deps/type_info/kallrecon/lib -I deps/Kerncall/lib
-  -I deps/hidemod/lib
+  -DCONFIG_KERNSC_DISCOVER, plus -I for lib, src, the KernCall,
+  Type_info and KallRecon include dirs
 - layout discovery is BTF first (type_info), anchor bootstrap
   fallback (task struct scan)
 
@@ -44,6 +42,38 @@ without a resolvable pgd), never fault. query_maps uses compile-time
 fields and needs no layout.
 
 ## API
+
+**int rwmem_core_init(const struct rwmem_resolver *res)**
+
+store the resolver and bring the mechanism up (touch injection
+kprobes, pool allocation). -EINVAL when res or res->name_to_addr is
+NULL.
+
+**void rwmem_core_exit(void)**
+
+tear the mechanism down and drop the resolver.
+
+**unsigned long rwmem_name_to_addr(const char *name)**
+
+the resolver the lib was given, for a transport that needs kernel
+symbols of its own. 0 when the name is unknown or the lib is not
+initialized.
+
+**long rwmem_dispatch(unsigned int cmd, unsigned long a0, unsigned long a1, unsigned long a2, unsigned long a3)**
+
+the protocol request table: maps RWMEM_CMD_* plus the four raw
+arguments a channel carried onto the lib calls. a transport
+authenticates the caller, then hands the command and its four
+arguments here, which is the only glue a channel needs. -ENOSYS for
+an unknown cmd.
+
+**int rwmem_sc_init(const char *key)**
+**void rwmem_sc_exit(void)**
+
+the reference syscall transport (src/): finds an empty ni_syscall
+slot, patches it, answers root only with the key authenticated and
+forwards to rwmem_dispatch. -EINVAL for an empty key, the KernCall
+error otherwise.
 
 **int rwmem_pgd_off(u32 *out)**
 
@@ -125,7 +155,7 @@ mapping at dst_vaddr and fills it page by page with
 remap_pfn_range from the source physical pages (gaps skipped).
 mapped pages are pinned (get_page) for the life of the mapping
 and released on unmap, so source memory stays valid even if
-swapped or reclaimed. needs maple tree (kr_name_to_addr
+swapped or reclaimed. needs maple tree (rwmem_name_to_addr
 "mas_find" nonzero, 6.1+), older kernels return -EOPNOTSUPP.
 -EINVAL (null arg, bad size, unaligned dst), -EFAULT (bad user
 arg), -EBADF (bad handle), -EOPNOTSUPP (symbol missing or kernel

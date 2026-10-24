@@ -24,10 +24,29 @@
 #include "anchor.h"
 #include "btf.h"
 #include "rwmem.h"
-
-extern unsigned long kr_name_to_addr(const char *name);
+#include "rwmem_int.h"
+#include "touch.h"
 
 #define RWMEM_STRUCT BIT(BTF_KIND_STRUCT)
+
+typedef long (*rwmem_nofault_fn)(void *dst, const void *src, size_t size);
+
+/*
+ * copy_to_kernel_nofault is not exported, so it comes from the resolver:
+ * a direct reference would fail at load with Unknown symbol
+ */
+static long __nocfi noinline rwmem_write_nofault(void *dst, const void *src,
+						 size_t size)
+{
+	static rwmem_nofault_fn fn;
+
+	if (!fn) {
+		fn = (rwmem_nofault_fn)rw_resolve("copy_to_kernel_nofault");
+		if (!fn)
+			return -ENODATA;
+	}
+	return fn(dst, src, size);
+}
 
 int rw_safe_read(void *dst, const void *src, size_t sz)
 {
@@ -349,7 +368,7 @@ static size_t write_ram_physical(size_t paddr, const char *buf, size_t size)
 		 * that turned out to be unusable would otherwise fault here instead of
 		 * being reported
 		 */
-		if (copy_to_kernel_nofault(__va(paddr), buf, sz))
+		if (rwmem_write_nofault(__va(paddr), buf, sz))
 			break;
 		buf += sz;
 		paddr += sz;
@@ -376,7 +395,7 @@ static void __nocfi rwmem_mte_sync_tags(pte_t old, pte_t pte)
 	static rwmem_mte_sync_tags_fn fn;
 
 	if (!fn) {
-		fn = (rwmem_mte_sync_tags_fn)kr_name_to_addr("mte_sync_tags");
+		fn = (rwmem_mte_sync_tags_fn)rw_resolve("mte_sync_tags");
 		if (!fn)
 			return;
 	}
@@ -389,12 +408,30 @@ static void __nocfi rwmem_mte_sync_tags(pte_t old, pte_t pte)
 #endif
 }
 
+typedef void (*rwmem_sync_icache_fn)(pte_t pte);
+
+/*
+ * also runtime: a trimmed image keeps the export only when a kmi consumer
+ * needs it, the 5.10 image drops it while the source still exports it
+ */
+static void __nocfi noinline rwmem_sync_icache(pte_t pte)
+{
+	static rwmem_sync_icache_fn fn;
+
+	if (!fn) {
+		fn = (rwmem_sync_icache_fn)rw_resolve("__sync_icache_dcache");
+		if (!fn)
+			return;
+	}
+	fn(pte);
+}
+
 static void rwmem_set_pte_at(pte_t *ptep, pte_t pte)
 {
 	pte_t old = READ_ONCE(*ptep);
 
 	if (pte_present(pte) && pte_user_exec(pte) && !pte_special(pte))
-		__sync_icache_dcache(pte);
+		rwmem_sync_icache(pte);
 	if (system_supports_mte() && pte_access_permitted(pte, false) &&
 	    !pte_special(pte) && pte_tagged(pte))
 		rwmem_mte_sync_tags(old, pte);
@@ -665,7 +702,7 @@ ssize_t rwmem_pid_list(pid_t __user *buf, size_t max)
 	    get_off(&g_off_tasks, "task_struct", "tasks"))
 		return -EOPNOTSUPP;
 
-	init_task_ptr = (struct task_struct *)kr_name_to_addr("init_task");
+	init_task_ptr = (struct task_struct *)rw_resolve("init_task");
 	if (!init_task_ptr)
 		return -ENODATA;
 
@@ -895,7 +932,7 @@ static int (*g_remap_pfn_range)(struct vm_area_struct *, unsigned long,
 
 static bool rwmem_remap_supported(void)
 {
-	return kr_name_to_addr("mas_find") != 0;
+	return rw_resolve("mas_find") != 0;
 }
 
 int __nocfi rwmem_remap(const struct rwmem_remap_arg __user *arg)
@@ -937,14 +974,14 @@ int __nocfi rwmem_remap(const struct rwmem_remap_arg __user *arg)
 
 	if (!g_install_special_mapping) {
 		g_install_special_mapping =
-			(void *)kr_name_to_addr("_install_special_mapping");
+			(void *)rw_resolve("_install_special_mapping");
 		if (!g_install_special_mapping) {
 			ret = -EOPNOTSUPP;
 			goto out_ctx;
 		}
 	}
 	if (!g_remap_pfn_range) {
-		g_remap_pfn_range = (void *)kr_name_to_addr("remap_pfn_range");
+		g_remap_pfn_range = (void *)rw_resolve("remap_pfn_range");
 		if (!g_remap_pfn_range) {
 			ret = -EOPNOTSUPP;
 			goto out_ctx;
@@ -1085,4 +1122,33 @@ out_pid:
 				 &karg.out, sizeof(karg.out)))
 		return -EFAULT;
 	return ret;
+}
+
+static const struct rwmem_resolver *g_res;
+
+unsigned long __nocfi noinline rw_resolve(const char *name)
+{
+	if (!g_res || !g_res->name_to_addr)
+		return 0;
+	return g_res->name_to_addr(name);
+}
+
+unsigned long rwmem_name_to_addr(const char *name)
+{
+	return rw_resolve(name);
+}
+
+int rwmem_core_init(const struct rwmem_resolver *res)
+{
+	if (!res || !res->name_to_addr)
+		return -EINVAL;
+	g_res = res;
+	rwmem_touch_init();
+	return 0;
+}
+
+void rwmem_core_exit(void)
+{
+	rwmem_touch_exit();
+	g_res = NULL;
 }

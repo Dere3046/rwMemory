@@ -13,9 +13,8 @@
 #include <linux/spinlock.h>
 
 #include "rwmem_proto.h"
+#include "rwmem_int.h"
 #include "touch.h"
-
-extern unsigned long kr_name_to_addr(const char *name);
 
 #define RWMEM_TOUCH_MAX_EVENTS 64
 
@@ -125,8 +124,8 @@ static struct input_dev *find_touch_device(void)
 
 	if (g_touch_dev)
 		return g_touch_dev;
-	input_dev_list = (struct list_head *)kr_name_to_addr("input_dev_list");
-	input_mutex = (struct mutex *)kr_name_to_addr("input_mutex");
+	input_dev_list = (struct list_head *)rw_resolve("input_dev_list");
+	input_mutex = (struct mutex *)rw_resolve("input_mutex");
 	if (!input_dev_list || !input_mutex)
 		return NULL;
 
@@ -205,13 +204,13 @@ int __nocfi rwmem_touch(const struct rwmem_touch_arg __user *arg)
 int __nocfi rwmem_touch_init(void)
 {
 	g_input_handle_event = (hm_input_handle_event)
-		kr_name_to_addr("input_handle_event");
+		rw_resolve("input_handle_event");
 	if (!g_input_handle_event)
 		return -EOPNOTSUPP;
 	g_register_kprobe = (hm_register_kprobe)
-		kr_name_to_addr("register_kprobe");
+		rw_resolve("register_kprobe");
 	g_unregister_kprobe = (hm_unregister_kprobe)
-		kr_name_to_addr("unregister_kprobe");
+		rw_resolve("unregister_kprobe");
 
 	g_pool = kzalloc(sizeof(*g_pool), GFP_KERNEL);
 	if (!g_pool)

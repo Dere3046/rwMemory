@@ -1,22 +1,14 @@
 obj-m := rwmem.o
 
-rwmem-y := src/rwmem_main.o src/rwmem_sc.o lib/rwmem.o lib/touch.o \
-	lib/dmabuf.o \
-	deps/KernCall/lib/sc.o deps/KernCall/lib/sc_slide.o \
-	deps/KernCall/lib/sc_sock.o \
-	deps/HooKern/lib/hk.o deps/HooKern/lib/hk_ksym.o \
-	deps/HooKern/lib/hk_patch.o deps/HooKern/lib/hk_flush.o \
-	deps/HooKern/lib/hk_ptr.o deps/HooKern/lib/hk_inline.o \
-	deps/HooKern/lib/hk_kprobe.o deps/HooKern/lib/hk_kretprobe.o \
-	deps/HooKern/lib/hk_sighook.o deps/HooKern/lib/hk_cfi.o \
-	deps/HooKern/lib/hk_binder.o \
-	deps/hidemod/lib/hidemod.o \
-	deps/Type_info/lib/port.o \
-	deps/Type_info/lib/btf.o deps/Type_info/lib/query.o \
-	deps/Type_info/lib/reg.o deps/Type_info/lib/lib.o \
-	deps/Type_info/lib/anchor.o deps/Type_info/lib/dwarf.o \
-	deps/KallRecon/lib/core.o \
-	deps/KallRecon/lib/anchor.o
+KDIR := $(KDIR)
+MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+ODIR := $(MDIR)/out/$(VER)
+
+DEPS := KernCall Type_info
+include $(MDIR)/mk/deps.mk
+
+rwmem-y := src/rwmem_main.o src/rwmem_sc.o lib/rwmem.o lib/rwmem_req.o \
+	lib/touch.o lib/dmabuf.o $(DEPS_OBJS_ALL)
 
 ccflags-y += -std=gnu11
 ccflags-y += -Wno-declaration-after-statement
@@ -27,23 +19,11 @@ ccflags-y += -DCONFIG_TI_REMAP
 ccflags-y += -DCONFIG_KERNSC_PATCH
 ccflags-y += -DCONFIG_KERNSC_DISCOVER
 
-ifdef RWMEM_HIDE
-ccflags-y += -DCONFIG_RWMEM_HIDE
-endif
-
 ifdef RWMEM_MAPS_FINDVMA
 ccflags-y += -DCONFIG_RWMEM_MAPS_FINDVMA
 endif
 ccflags-y += -I$(src)/lib
-ccflags-y += -I$(src)/deps/HooKern/lib
-ccflags-y += -I$(src)/deps/KernCall/lib
-ccflags-y += -I$(src)/deps/hidemod/lib
-ccflags-y += -I$(src)/deps/Type_info/lib
-ccflags-y += -I$(src)/deps/KallRecon/lib
-
-KDIR := $(KDIR)
-MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
-ODIR := $(MDIR)/out/$(VER)
+ccflags-y += $(addprefix -I$(src)/,$(DEPS_INCS_ALL))
 
 $(info -- KDIR: $(KDIR))
 $(info -- MDIR: $(MDIR))

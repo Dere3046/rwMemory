@@ -20,7 +20,6 @@ MODULE_IMPORT_NS(DMA_BUF);
 #include "rwmem.h"
 #include "dmabuf.h"
 
-extern unsigned long kr_name_to_addr(const char *name);
 
 struct rwmem_dmabuf {
 	struct page **pages;

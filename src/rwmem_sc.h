@@ -6,9 +6,7 @@
 #ifndef RWMEM_SC_H
 #define RWMEM_SC_H
 
-int rwmem_sc_init(void);
+int rwmem_sc_init(const char *key);
 void rwmem_sc_exit(void);
-
-unsigned long __nocfi kr_name_to_addr(const char *name);
 
 #endif

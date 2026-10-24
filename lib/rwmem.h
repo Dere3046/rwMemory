@@ -10,6 +10,17 @@
 
 #include "rwmem_proto.h"
 
+struct rwmem_resolver {
+	unsigned long (*name_to_addr)(const char *name);
+};
+
+int rwmem_core_init(const struct rwmem_resolver *res);
+void rwmem_core_exit(void);
+unsigned long rwmem_name_to_addr(const char *name);
+
+long rwmem_dispatch(unsigned int cmd, unsigned long a0, unsigned long a1,
+		    unsigned long a2, unsigned long a3);
+
 int rw_safe_read(void *dst, const void *src, size_t sz);
 
 struct pid *rwmem_handle_get(int id);
